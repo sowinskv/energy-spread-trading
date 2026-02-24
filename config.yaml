@@ -1,0 +1,27 @@
+data:
+  file_path: "data/model_input.csv"
+  target_col: "spread_SDAC_IDA1_PL"
+  test_days: 30
+  leakage_cols:
+    - "spread_SDAC_IDA1_PL"
+    - "IDA1_DE"
+    - "IDA1_PL"
+    - "IDA1_SK"
+    - "IDA2_DE"
+    - "IDA2_PL"
+    - "IDA2_SK"
+    - "IDA3_DE"
+    - "IDA3_PL"
+    - "IDA3_SK"
+
+model:
+  n_estimators: 200
+  max_depth: 5
+  learning_rate: 0.05
+  subsample: 0.8
+  colsample_bytree: 0.8
+  random_state: 42
+
+mlflow:
+  experiment_name: "Day_Ahead_Intraday_Spread"
+  run_name: "xgboost_baseline_pipeline"
