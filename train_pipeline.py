@@ -10,6 +10,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from features import TimeSeriesImputer, EnergyFeatureEngineer
 
+
 def asymmetric_trading_loss(y_true, y_pred):
     residual = y_pred - y_true
     grad = residual.copy()
@@ -71,6 +72,45 @@ def calculate_meta_trading_metrics(y_true, y_pred, meta_probs, confidence_thresh
         "percent_traded": pct_traded
     }
 
+def load_and_format_raw_data(filepath):
+    print("loading raw data and formatting...")
+    df = pd.read_csv(filepath, low_memory=False)
+    
+    # 1. string to float conversion (handling european commas)
+    cols_to_exclude = ['date_cet', 'IS_ACTIVE_DOWN_SDAC_PL', 'IS_ACTIVE_UP_SDAC_PL']
+    numeric_cols = [col for col in df.columns if col not in cols_to_exclude]
+    for col in numeric_cols:
+        df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '.'), errors='coerce')
+        
+    # 2. boolean mapping
+    for col in ['IS_ACTIVE_DOWN_SDAC_PL', 'IS_ACTIVE_UP_SDAC_PL']:
+        df[col] = df[col].map({'TRUE': 1, 'FALSE': 0, True: 1, False: 0}).fillna(0).astype(int)
+        
+    # 3. datetime indexing & deduplication
+    df['date_cet'] = pd.to_datetime(df['date_cet'])
+    df.set_index('date_cet', inplace=True)
+    if df.index.duplicated().any():
+        df = df.groupby(df.index).first()
+    df = df.asfreq('h')
+    
+    # 4. create the target variable
+    df['spread_SDAC_IDA1_PL'] = df['SDAC_PL'] - df['IDA1_PL']
+    
+    # fix: patch up any NaNs in the target caused by missing exchange data or df.asfreq('h')
+    df['spread_SDAC_IDA1_PL'] = df['spread_SDAC_IDA1_PL'].interpolate(method='linear', limit_direction='both')
+    
+    # 5. create target lags BEFORE the target is separated from X
+    # strictly shifting by 24+ hours so we don't accidentally look into the future
+    df['target_lag_24h'] = df['spread_SDAC_IDA1_PL'].shift(24)
+    df['target_lag_48h'] = df['spread_SDAC_IDA1_PL'].shift(48)
+    df['target_lag_168h'] = df['spread_SDAC_IDA1_PL'].shift(168)
+    
+    df['target_rolling_mean_24h'] = df['spread_SDAC_IDA1_PL'].shift(24).rolling(window=24).mean()
+    df['target_rolling_std_24h'] = df['spread_SDAC_IDA1_PL'].shift(24).rolling(window=24).std()
+    df['target_rolling_mean_168h'] = df['spread_SDAC_IDA1_PL'].shift(24).rolling(window=168).mean()
+    
+    return df
+
 def get_purged_walk_forward_splits(df_length, train_days, test_days, purge_days, n_splits):
     train_steps = train_days * 24
     test_steps = test_days * 24
@@ -95,7 +135,7 @@ def main():
     with mlflow.start_run(run_name="xgboost_meta_labeling"):
         
         print("Loading data...")
-        df = pd.read_csv(config.data.file_path, index_col='date_cet', parse_dates=True)
+        df = load_and_format_raw_data(config.data.file_path)
         
         X_full = df.drop(columns=config.data.leakage_cols)
         bool_cols = ['IS_ACTIVE_DOWN_SDAC_PL', 'IS_ACTIVE_UP_SDAC_PL']
@@ -161,7 +201,7 @@ def main():
             
             meta_params = dict(config.meta_model)
             meta_params.pop('confidence_threshold', None)
-            
+
             manager = xgb.XGBClassifier(**meta_params)
             manager.fit(X_meta_enhanced, meta_labels)
             

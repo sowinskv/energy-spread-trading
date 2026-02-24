@@ -1,5 +1,5 @@
 data:
-  file_path: "data/model_input.csv"
+  file_path: "data/energy_data.csv"
   target_col: "spread_SDAC_IDA1_PL"
   leakage_cols:
     - "spread_SDAC_IDA1_PL"

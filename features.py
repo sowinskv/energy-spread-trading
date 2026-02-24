@@ -42,6 +42,11 @@ class EnergyFeatureEngineer(BaseEstimator, TransformerMixin):
         X['hour'] = X.index.hour
         X['hour_sin'] = np.sin(2 * np.pi * X['hour'] / 24)
         X['hour_cos'] = np.cos(2 * np.pi * X['hour'] / 24)
+        
+        X['month'] = X.index.month
+        X['month_sin'] = np.sin(2 * np.pi * X['month'] / 12)
+        X['month_cos'] = np.cos(2 * np.pi * X['month'] / 12)
+        
         X['day_of_week'] = X.index.dayofweek
         X['is_weekend'] = X['day_of_week'].isin([5, 6]).astype(int)
         
