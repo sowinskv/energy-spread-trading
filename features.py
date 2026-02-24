@@ -4,7 +4,7 @@ import numpy as np
 from sklearn.base import BaseEstimator, TransformerMixin
 
 class TimeSeriesImputer(BaseEstimator, TransformerMixin):
-    """Handles multi-tier imputation as defined in your prepare_data.py"""
+    """Handles multi-tier imputation as defined in prepare_data.py"""
     def __init__(self, bool_cols, numeric_cols):
         self.bool_cols = bool_cols
         self.numeric_cols = numeric_cols
@@ -27,7 +27,7 @@ class TimeSeriesImputer(BaseEstimator, TransformerMixin):
         for col in self.numeric_cols:
             X[col] = X[col].fillna(X[col].shift(168))
             X[col] = X[col].fillna(X[col].shift(24))
-            X[col] = X[col].fillna(method='bfill') # Final safety net
+            X[col] = X[col].bfill()
             
         return X
 
