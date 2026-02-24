@@ -1,17 +1,12 @@
-# Core data science packages
 pandas==2.2.3
 numpy==1.26.4
 
-# Visualization    
 matplotlib==3.8.3
 seaborn>=0.12.0
 
-# Machine Learning
 scikit-learn==1.5.2
 xgboost>=1.7.0
 
-# Deep Learning (for LSTM model)
 tensorflow>=2.13.0
 
-# Statistical analysis (for EDA)
 statsmodels>=0.14.0
