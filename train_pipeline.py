@@ -151,13 +151,18 @@ def main():
             # 1 if profit > 0, else 0
             meta_raw_pnl = np.sign(meta_analyst_preds) * y_meta - 0.5
             meta_labels = (meta_raw_pnl > 0).astype(int)
+
+            
             
             # 5. TRAIN META MODEL (The Manager)
             # give the manager the market features AND the analyst's prediction
             X_meta_enhanced = X_meta_prep.copy()
             X_meta_enhanced['analyst_pred'] = meta_analyst_preds
             
-            manager = xgb.XGBClassifier(**config.meta_model)
+            meta_params = dict(config.meta_model)
+            meta_params.pop('confidence_threshold', None)
+            
+            manager = xgb.XGBClassifier(**meta_params)
             manager.fit(X_meta_enhanced, meta_labels)
             
             # 6. EVALUATE ON TEST SET
@@ -170,7 +175,12 @@ def main():
             test_manager_probs = manager.predict_proba(X_test_enhanced)[:, 1]
             
             # calculate final metrics using the Meta-Model filter
-            metrics = calculate_meta_trading_metrics(y_test, test_analyst_preds, test_manager_probs)
+            metrics = calculate_meta_trading_metrics(
+                y_test, 
+                test_analyst_preds, 
+                test_manager_probs, 
+                confidence_threshold=config.meta_model.confidence_threshold
+            )
             
             fold_pnls.append(metrics['total_pnl'])
             fold_sharpes.append(metrics['sharpe_ratio'])

@@ -15,25 +15,26 @@ data:
 
 cv:
   train_days: 180
-  meta_train_days: 60 # 'the manager' gets the last 2 months of the train set to learn 'the analyst's' mistakes
+  meta_train_days: 60
   test_days: 30
   purge_days: 7
   n_splits: 4
 
 model:
   n_estimators: 200
-  max_depth: 7
-  learning_rate: 0.05
-  subsample: 0.8
+  max_depth: 8
+  learning_rate: 0.0736
+  subsample: 0.6604
   colsample_bytree: 0.8
   random_state: 42
 
 meta_model:
-  n_estimators: 100
-  max_depth: 3 # keep the manager shallow so it doesn't overthink
-  learning_rate: 0.05
+  n_estimators: 150
+  max_depth: 4
+  learning_rate: 0.0273
   random_state: 42
+  confidence_threshold: 0.5041
 
 mlflow:
   experiment_name: "Day_Ahead_Intraday_Spread"
-  run_name: "xgboost_meta_labeling"
+  run_name: "xgboost_final_tuned"
