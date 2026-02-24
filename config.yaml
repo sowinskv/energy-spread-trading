@@ -15,18 +15,25 @@ data:
 
 cv:
   train_days: 180
+  meta_train_days: 60 # 'the manager' gets the last 2 months of the train set to learn 'the analyst's' mistakes
   test_days: 30
-  purge_days: 7 # drop 1 week between train and test to prevent 168h rolling leakage
-  n_splits: 4 # perform this roll 4 times
+  purge_days: 7
+  n_splits: 4
 
 model:
   n_estimators: 200
-  max_depth: 5
+  max_depth: 7
   learning_rate: 0.05
   subsample: 0.8
   colsample_bytree: 0.8
   random_state: 42
 
+meta_model:
+  n_estimators: 100
+  max_depth: 3 # keep the manager shallow so it doesn't overthink
+  learning_rate: 0.05
+  random_state: 42
+
 mlflow:
   experiment_name: "Day_Ahead_Intraday_Spread"
-  run_name: "xgboost_purged_cv"
+  run_name: "xgboost_meta_labeling"
