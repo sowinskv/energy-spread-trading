@@ -20,6 +20,7 @@ __pycache__/
 
 # notes
 notes.md
+roadmap.md
 
 mlruns/
 temp_plots/
