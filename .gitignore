@@ -1,0 +1,22 @@
+# data and models
+data/
+*.csv
+*.model
+
+# plots and images
+plots/
+*.png
+*.jpg
+*.jpeg
+
+# python environments and cache
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# macos junk files
+.DS_Store
+
+# notes
+notes.md
