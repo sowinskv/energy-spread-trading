@@ -10,6 +10,36 @@ from sklearn.pipeline import Pipeline
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from features import TimeSeriesImputer, EnergyFeatureEngineer
 
+def asymmetric_trading_loss(y_true, y_pred):
+    """
+    Custom objective function for trading.
+    Penalizes wrong-direction predictions heavily, scaled by spread magnitude.
+    """
+    # base gradient & hessian
+    residual = y_pred - y_true
+    grad = residual.copy()
+    hess = np.ones_like(y_pred)
+    
+    # directional penalties (ad. 1. in notes)
+    fp_mask = (y_true < 0) & (y_pred > 0)
+    
+    # FN (ad. 2. in notes)
+    fn_mask = (y_true > 0) & (y_pred < 0)
+    
+    grad[fp_mask] *= 5.0
+    hess[fp_mask] *= 5.0
+    
+    grad[fn_mask] *= 2.0
+    hess[fn_mask] *= 2.0
+    
+    # profit-weighting (ad. 3. in notes)
+    magnitude_weight = 1.0 + (np.abs(y_true) / 10.0) 
+    
+    grad = grad * magnitude_weight
+    hess = hess * magnitude_weight
+    
+    return grad, hess
+
 def get_purged_walk_forward_splits(df_length, train_days, test_days, purge_days, n_splits):
     """
     yirelds train and test indices for purged walk-forward CV, working backwards 
@@ -86,7 +116,9 @@ def main():
             pipeline = Pipeline([
                 ('imputer', TimeSeriesImputer(bool_cols=bool_cols, numeric_cols=numeric_cols)),
                 ('feature_engineer', EnergyFeatureEngineer()),
-                ('regressor', xgb.XGBRegressor(**config.model))
+                ('regressor', xgb.XGBRegressor(**config.model,
+                                               objective=asymmetric_trading_loss
+                ))
             ])
 
             pipeline.fit(X_train, y_train)
