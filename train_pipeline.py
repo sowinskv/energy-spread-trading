@@ -15,15 +15,11 @@ def asymmetric_trading_loss(y_true, y_pred):
     Custom objective function for trading.
     Penalizes wrong-direction predictions heavily, scaled by spread magnitude.
     """
-    # base gradient & hessian
     residual = y_pred - y_true
     grad = residual.copy()
     hess = np.ones_like(y_pred)
     
-    # directional penalties (ad. 1. in notes)
     fp_mask = (y_true < 0) & (y_pred > 0)
-    
-    # FN (ad. 2. in notes)
     fn_mask = (y_true > 0) & (y_pred < 0)
     
     grad[fp_mask] *= 5.0
@@ -32,7 +28,6 @@ def asymmetric_trading_loss(y_true, y_pred):
     grad[fn_mask] *= 2.0
     hess[fn_mask] *= 2.0
     
-    # profit-weighting (ad. 3. in notes)
     magnitude_weight = 1.0 + (np.abs(y_true) / 10.0) 
     
     grad = grad * magnitude_weight
@@ -40,11 +35,43 @@ def asymmetric_trading_loss(y_true, y_pred):
     
     return grad, hess
 
+def calculate_trading_metrics(y_true, y_pred, cost_per_mwh=0.5):
+    """
+    Calculates pure financial metrics: PnL, Sharpe, Drawdown, and Hit Rate.
+    """
+    # convert to numpy to safely align arrays ignoring pandas index
+    y_true_np = np.array(y_true)
+    y_pred_np = np.array(y_pred)
+    
+    # logic: if we predict positive, we buy (+1). if negative, we sell (-1).
+    # profit is our directional bet multiplied by the actual spread.
+    raw_pnl = np.sign(y_pred_np) * y_true_np
+    
+    # subtract the broker fee for every single hour we trade
+    net_pnl = pd.Series(raw_pnl - cost_per_mwh)
+    
+    equity_curve = net_pnl.cumsum()
+    
+    # annualized sharpe (8760 hours in a year)
+    if net_pnl.std() != 0:
+        sharpe = (net_pnl.mean() / net_pnl.std()) * np.sqrt(8760)
+    else:
+        sharpe = 0
+        
+    running_max = equity_curve.cummax()
+    drawdown = equity_curve - running_max
+    max_dd = drawdown.min()
+    
+    dir_acc = np.mean(np.sign(y_pred_np) == np.sign(y_true_np))
+    
+    return {
+        "total_pnl": equity_curve.iloc[-1],
+        "sharpe_ratio": sharpe,
+        "max_drawdown": max_dd,
+        "directional_accuracy": dir_acc * 100 # as percentage
+    }
+
 def get_purged_walk_forward_splits(df_length, train_days, test_days, purge_days, n_splits):
-    """
-    yirelds train and test indices for purged walk-forward CV, working backwards 
-    from the most recent data to ensure the last fold tests on the latest month.
-    """
     train_steps = train_days * 24
     test_steps = test_days * 24
     purge_steps = purge_days * 24
@@ -66,17 +93,15 @@ def get_purged_walk_forward_splits(df_length, train_days, test_days, purge_days,
             
         train_indices = np.arange(train_start, train_end)
         test_indices = np.arange(test_start, test_end)
-        
         splits.append((train_indices, test_indices))
         
-    # reverse so fold 1 is the oldest in time, and fold N is the most recent
     return splits[::-1]
 
 def main():
     config = OmegaConf.load("config.yaml")
     mlflow.set_experiment(config.mlflow.experiment_name)
     
-    with mlflow.start_run(run_name=config.mlflow.run_name):
+    with mlflow.start_run(run_name="xgboost_quant_backtest"):
         
         mlflow.log_params(config.model)
         mlflow.log_params(config.cv)
@@ -96,13 +121,14 @@ def main():
             n_splits=config.cv.n_splits
         )
 
-        fold_maes = []
-        fold_rmses = []
+        # lists to store metrics across folds
+        fold_maes, fold_rmses = [], []
+        fold_pnls, fold_sharpes, fold_dds, fold_accs = [], [], [], []
 
-        print(f"Starting {config.cv.n_splits}-Fold Purged Walk-Forward CV...")
+        print(f"Starting {config.cv.n_splits}-Fold CV with QUANT METRICS...")
 
         for fold, (train_idx, test_idx) in enumerate(splits, 1):
-            print(f"--- Fold {fold} ---")
+            print(f"\n--- Fold {fold} ---")
             
             train_df = df.iloc[train_idx]
             test_df = df.iloc[test_idx]
@@ -116,52 +142,69 @@ def main():
             pipeline = Pipeline([
                 ('imputer', TimeSeriesImputer(bool_cols=bool_cols, numeric_cols=numeric_cols)),
                 ('feature_engineer', EnergyFeatureEngineer()),
-                ('regressor', xgb.XGBRegressor(**config.model,
-                                               objective=asymmetric_trading_loss
-                ))
+                ('regressor', xgb.XGBRegressor(**config.model, objective=asymmetric_trading_loss))
             ])
 
             pipeline.fit(X_train, y_train)
             preds = pipeline.predict(X_test)
             
+            # 1. statistical metrics
             fold_mae = mean_absolute_error(y_test, preds)
             fold_rmse = np.sqrt(mean_squared_error(y_test, preds))
-            
             fold_maes.append(fold_mae)
             fold_rmses.append(fold_rmse)
             
-            mlflow.log_metric(f"fold_{fold}_MAE", fold_mae)
+            # 2. financial metrics
+            trade_metrics = calculate_trading_metrics(y_test, preds, cost_per_mwh=0.5)
+            fold_pnls.append(trade_metrics['total_pnl'])
+            fold_sharpes.append(trade_metrics['sharpe_ratio'])
+            fold_dds.append(trade_metrics['max_drawdown'])
+            fold_accs.append(trade_metrics['directional_accuracy'])
             
-            print(f"Train Period: {train_df.index.min().date()} to {train_df.index.max().date()}")
-            print(f"Purge Period: {train_df.index.max().date()} to {test_df.index.min().date()}")
-            print(f"Test Period : {test_df.index.min().date()} to {test_df.index.max().date()}")
-            print(f"Fold {fold} MAE: {fold_mae:.2f} | RMSE: {fold_rmse:.2f}\n")
+            # log to mlflow
+            mlflow.log_metric(f"fold_{fold}_MAE", fold_mae)
+            mlflow.log_metric(f"fold_{fold}_PnL", trade_metrics['total_pnl'])
+            mlflow.log_metric(f"fold_{fold}_Sharpe", trade_metrics['sharpe_ratio'])
+            
+            print(f"Stats  -> MAE: {fold_mae:.2f} | RMSE: {fold_rmse:.2f}")
+            print(f"Trading-> PnL: €{trade_metrics['total_pnl']:.2f} | Sharpe: {trade_metrics['sharpe_ratio']:.2f}")
+            print(f"Risk   -> Max Drawdown: €{trade_metrics['max_drawdown']:.2f} | Hit Rate: {trade_metrics['directional_accuracy']:.1f}%")
 
+        # average everything
         avg_mae = np.mean(fold_maes)
-        avg_rmse = np.mean(fold_rmses)
-        mlflow.log_metric("CV_Avg_MAE", avg_mae)
-        mlflow.log_metric("CV_Avg_RMSE", avg_rmse)
+        avg_pnl = np.mean(fold_pnls)
+        avg_sharpe = np.mean(fold_sharpes)
+        avg_dd = np.mean(fold_dds)
+        avg_acc = np.mean(fold_accs)
         
+        mlflow.log_metric("CV_Avg_MAE", avg_mae)
+        mlflow.log_metric("CV_Avg_PnL", avg_pnl)
+        mlflow.log_metric("CV_Avg_Sharpe", avg_sharpe)
+        
+        print(f"\n=========================================")
+        print(f"CV AVERAGE STATS : MAE: {avg_mae:.2f}")
+        print(f"CV AVERAGE TRADING: PnL: €{avg_pnl:.2f} | Sharpe: {avg_sharpe:.2f} | Hit Rate: {avg_acc:.1f}%")
         print(f"=========================================")
-        print(f"CV Average MAE: {avg_mae:.2f} | CV Average RMSE: {avg_rmse:.2f}")
 
-        # plot the LAST fold for visual checking
-        plt.figure(figsize=(15, 6))
-        plot_idx = -24 * 7
-        plt.plot(y_test.index[plot_idx:], y_test.values[plot_idx:], label='Actual', alpha=0.8)
-        plt.plot(y_test.index[plot_idx:], preds[plot_idx:], label='Predicted', alpha=0.9, linestyle='--')
-        plt.title(f'Pipeline Predictions (Last 7 Days of Fold {config.cv.n_splits})')
+        # generate an equity curve plot for the last fold to visualize the money
+        plt.figure(figsize=(12, 5))
+        net_pnl = (np.sign(preds) * np.array(y_test)) - 0.5
+        equity_curve = pd.Series(net_pnl).cumsum()
+        plt.plot(y_test.index, equity_curve, color='green', label='Cumulative PnL (€)')
+        plt.title(f'Simulated Equity Curve (Fold {config.cv.n_splits}) - Fees Included')
+        plt.ylabel('Profit in Euros (1 MWh volume)')
+        plt.fill_between(y_test.index, equity_curve, 0, where=(equity_curve > 0), color='green', alpha=0.1)
+        plt.fill_between(y_test.index, equity_curve, 0, where=(equity_curve < 0), color='red', alpha=0.1)
         plt.legend()
-
+        
         os.makedirs("temp_plots", exist_ok=True)
-        plot_path = "temp_plots/predictions_cv.png"
+        plot_path = "temp_plots/equity_curve.png"
         plt.savefig(plot_path)
         plt.close()
         mlflow.log_artifact(plot_path, "evaluation_plots")
 
-        # log the pipeline fitted on the FINAL fold
-        mlflow.sklearn.log_model(pipeline, "xgboost_pipeline_latest_fold")
-        print("Run complete. Check MLflow UI.")
+        mlflow.sklearn.log_model(pipeline, "xgboost_pipeline_quant")
+        print("Run complete. Check MLflow UI for financial metrics!")
 
 if __name__ == "__main__":
     main()
