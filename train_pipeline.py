@@ -111,22 +111,29 @@ def load_and_format_raw_data(filepath):
     
     return df
 
-def get_purged_walk_forward_splits(df_length, train_days, test_days, purge_days, n_splits):
-    train_steps = train_days * 24
+def get_expanding_walk_forward_splits(df_length, initial_train_days, test_days, purge_days, n_splits):
+    """
+    Expanding window: each fold gets progressively more training data.
+    More realistic for production where you accumulate historical data daily.
+    """
+    initial_train_steps = initial_train_days * 24
     test_steps = test_days * 24
     purge_steps = purge_days * 24
-    step_size = test_steps 
+    
     splits = []
-    end_idx = df_length
     for i in range(n_splits):
-        test_end = end_idx - (i * step_size)
-        test_start = test_end - test_steps
-        purge_start = test_start - purge_steps
-        train_end = purge_start
-        train_start = train_end - train_steps
-        if train_start < 0: raise ValueError("Dataset too small.")
+        test_start = initial_train_steps + purge_steps + (i * (test_steps + purge_steps))
+        test_end = test_start + test_steps
+        
+        if test_end > df_length:
+            break
+            
+        train_start = 0 
+        train_end = test_start - purge_steps
+        
         splits.append((np.arange(train_start, train_end), np.arange(test_start, test_end)))
-    return splits[::-1]
+    
+    return splits
 
 def main():
     """main training pipeline with meta-labeling approach.
@@ -146,9 +153,9 @@ def main():
         bool_cols = ['IS_ACTIVE_DOWN_SDAC_PL', 'IS_ACTIVE_UP_SDAC_PL']
         numeric_cols = [c for c in X_full.columns if c not in bool_cols]
 
-        splits = get_purged_walk_forward_splits(
+        splits = get_expanding_walk_forward_splits(
             df_length=len(df),
-            train_days=config.cv.train_days,
+            initial_train_days=270,  
             test_days=config.cv.test_days,
             purge_days=config.cv.purge_days,
             n_splits=config.cv.n_splits

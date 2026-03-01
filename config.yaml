@@ -38,8 +38,8 @@ meta_model:
 trading:
   position_size_mwh: 1
   cost_per_mwh: 0.5
-  currency: "EUR" # Assumed currency - EU Market Coupling uses EUR for all settlements
+  currency: "EUR" # assumed currency
 
 mlflow:
-  experiment_name: "Day_Ahead_Intraday_Spread"
+  experiment_name: "energy_price_prediction"
   run_name: "xgboost_final_tuned"
