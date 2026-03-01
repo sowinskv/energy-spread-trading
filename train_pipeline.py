@@ -1,13 +1,9 @@
 import pandas as pd
 import numpy as np
-import os
-import matplotlib.pyplot as plt
 import xgboost as xgb
 import mlflow
-import mlflow.xgboost
 from omegaconf import OmegaConf
 from sklearn.pipeline import Pipeline
-from sklearn.metrics import mean_absolute_error, mean_squared_error
 from features import TimeSeriesImputer, EnergyFeatureEngineer
 
 
@@ -40,16 +36,10 @@ def calculate_meta_trading_metrics(y_true, y_pred, meta_probs, confidence_thresh
     y_pred_np = np.array(y_pred)
     meta_probs_np = np.array(meta_probs)
     
-    # the analyst's intended position
     intended_position = np.sign(y_pred_np)
-    
-    # the manager's veto power (1 = trade, 0 = sit out)
     trade_mask = (meta_probs_np > confidence_threshold).astype(int)
-    
-    # actual executed position (scaled by position size)
     actual_position = intended_position * trade_mask * position_size_mwh
     
-    # we only pay fees when we actually trade
     raw_pnl = actual_position * y_true_np
     fees = trade_mask * cost_per_mwh
     net_pnl = pd.Series(raw_pnl - fees)
@@ -65,23 +55,19 @@ def calculate_meta_trading_metrics(y_true, y_pred, meta_probs, confidence_thresh
     drawdown = equity_curve - running_max
     max_dd = drawdown.min()
     
-    # trades executed %
     pct_traded = np.mean(trade_mask) * 100
     
-    # Hit rate: percentage of profitable trades
-    executed_trades = net_pnl[trade_mask == 1]  # only consider executed trades
+    executed_trades = net_pnl[trade_mask == 1]
     if len(executed_trades) > 0:
-        hit_rate = (executed_trades > 0).mean() * 100  # percentage of winning trades
+        hit_rate = (executed_trades > 0).mean() * 100
     else:
         hit_rate = 0
     
-    # Sortino ratio: like Sharpe but only considers downside volatility
     if len(net_pnl) > 0:
-        downside_returns = net_pnl[net_pnl < 0]  # only negative returns
+        downside_returns = net_pnl[net_pnl < 0]
         if len(downside_returns) > 0 and downside_returns.std() != 0:
             sortino = (net_pnl.mean() / downside_returns.std()) * np.sqrt(8760)
         else:
-            # If no downside returns, set to a high value or same as sharpe
             sortino = sharpe if sharpe != 0 else 0
     else:
         sortino = 0
@@ -99,31 +85,22 @@ def load_and_format_raw_data(filepath):
     print("loading raw data and formatting...")
     df = pd.read_csv(filepath, low_memory=False)
     
-    # 1. string to float conversion (handling european commas)
     cols_to_exclude = ['date_cet', 'IS_ACTIVE_DOWN_SDAC_PL', 'IS_ACTIVE_UP_SDAC_PL']
     numeric_cols = [col for col in df.columns if col not in cols_to_exclude]
     for col in numeric_cols:
         df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '.'), errors='coerce')
         
-    # 2. boolean mapping
     for col in ['IS_ACTIVE_DOWN_SDAC_PL', 'IS_ACTIVE_UP_SDAC_PL']:
         df[col] = df[col].map({'TRUE': 1, 'FALSE': 0, True: 1, False: 0}).fillna(0).astype(int)
         
-    # 3. datetime indexing & deduplication
     df['date_cet'] = pd.to_datetime(df['date_cet'])
     df.set_index('date_cet', inplace=True)
     if df.index.duplicated().any():
         df = df.groupby(df.index).first()
     df = df.asfreq('h')
-    
-    # 4. create the target variable
     df['spread_SDAC_IDA1_PL'] = df['SDAC_PL'] - df['IDA1_PL']
-    
-    # fix: patch up any NaNs in the target caused by missing exchange data or df.asfreq('h')
     df['spread_SDAC_IDA1_PL'] = df['spread_SDAC_IDA1_PL'].interpolate(method='linear', limit_direction='both')
     
-    # 5. create target lags BEFORE the target is separated from X
-    # strictly shifting by 24+ hours so we don't accidentally look into the future
     df['target_lag_24h'] = df['spread_SDAC_IDA1_PL'].shift(24)
     df['target_lag_48h'] = df['spread_SDAC_IDA1_PL'].shift(48)
     df['target_lag_168h'] = df['spread_SDAC_IDA1_PL'].shift(168)
@@ -162,7 +139,7 @@ def main():
     
     with mlflow.start_run(run_name="xgboost_meta_labeling"):
         
-        print("Loading data...")
+        print("loading data...")
         df = load_and_format_raw_data(config.data.file_path)
         
         X_full = df.drop(columns=config.data.leakage_cols)
@@ -180,21 +157,17 @@ def main():
         fold_pnls, fold_sharpes, fold_dds, fold_traded = [], [], [], []
         fold_hit_rates, fold_sortinos = [], []
 
-        print(f"Starting Meta-Labeling CV Pipeline...")
+        print("starting cross-validation pipeline...")
 
         for fold, (train_idx, test_idx) in enumerate(splits, 1):
-            print(f"\n--- Fold {fold} ---")
+            print(f"\n--- fold {fold} ---")
             
-            # 1. SPLIT THE DATA
             train_df = df.iloc[train_idx]
             test_df = df.iloc[test_idx]
             
-            # we split the train_df into Primary (Analyst) and Meta (Manager)
             split_meta_idx = len(train_df) - (config.cv.meta_train_days * 24)
             primary_df = train_df.iloc[:split_meta_idx]
             meta_df = train_df.iloc[split_meta_idx:]
-            
-            # 2. PREPROCESSING PIPELINE (Train on Primary, apply to all)
             preprocessor = Pipeline([
                 ('imputer', TimeSeriesImputer(bool_cols=bool_cols, numeric_cols=numeric_cols)),
                 ('feature_engineer', EnergyFeatureEngineer())
@@ -209,22 +182,12 @@ def main():
             X_test_prep = preprocessor.transform(test_df.drop(columns=config.data.leakage_cols))
             y_test = test_df[config.data.target_col]
 
-            # 3. TRAIN PRIMARY MODEL (The Analyst)
             analyst = xgb.XGBRegressor(**config.model, objective=asymmetric_trading_loss)
             analyst.fit(X_prim_prep, y_prim)
             
-            # 4. GENERATE META LABELS ON THE MANAGER'S DATA
             meta_analyst_preds = analyst.predict(X_meta_prep)
-            
-            # did the analyst make a profit after the 0.50 fee? 
-            # 1 if profit > 0, else 0
             meta_raw_pnl = np.sign(meta_analyst_preds) * y_meta - 0.5
             meta_labels = (meta_raw_pnl > 0).astype(int)
-
-            
-            
-            # 5. TRAIN META MODEL (The Manager)
-            # give the manager the market features AND the analyst's prediction
             X_meta_enhanced = X_meta_prep.copy()
             X_meta_enhanced['analyst_pred'] = meta_analyst_preds
             
@@ -234,16 +197,12 @@ def main():
             manager = xgb.XGBClassifier(**meta_params)
             manager.fit(X_meta_enhanced, meta_labels)
             
-            # 6. EVALUATE ON TEST SET
             test_analyst_preds = analyst.predict(X_test_prep)
             
             X_test_enhanced = X_test_prep.copy()
             X_test_enhanced['analyst_pred'] = test_analyst_preds
             
-            # the manager outputs probability of profit
             test_manager_probs = manager.predict_proba(X_test_enhanced)[:, 1]
-            
-            # calculate final metrics using the Meta-Model filter
             metrics = calculate_meta_trading_metrics(
                 y_test, 
                 test_analyst_preds, 
@@ -265,10 +224,9 @@ def main():
             mlflow.log_metric(f"fold_{fold}_HitRate", metrics['hit_rate'])
             mlflow.log_metric(f"fold_{fold}_Sortino", metrics['sortino_ratio'])
             
-            print(f"Trading-> PnL: {config.trading.currency}{metrics['total_pnl']:.2f} | Sharpe: {metrics['sharpe_ratio']:.2f} | Sortino: {metrics['sortino_ratio']:.2f}")
-            print(f"Risk   -> Max Drawdown: {config.trading.currency}{metrics['max_drawdown']:.2f} | Hit Rate: {metrics['hit_rate']:.1f}% | Traded: {metrics['percent_traded']:.1f}% of hours")
+            print(f"pnl: {config.trading.currency}{metrics['total_pnl']:.2f} | sharpe: {metrics['sharpe_ratio']:.2f} | sortino: {metrics['sortino_ratio']:.2f}")
+            print(f"drawdown: {config.trading.currency}{metrics['max_drawdown']:.2f} | hit rate: {metrics['hit_rate']:.1f}% | traded: {metrics['percent_traded']:.1f}%")
 
-        # AVERAGE METRICS
         avg_pnl = np.mean(fold_pnls)
         avg_sharpe = np.mean(fold_sharpes)
         avg_sortino = np.mean(fold_sortinos)
@@ -276,13 +234,12 @@ def main():
         avg_dd = np.mean(fold_dds)
         avg_traded = np.mean(fold_traded)
         
-        print(f"\n=========================================")
-        print(f"META-LABELING AVERAGE TRADING:")
-        print(f"PnL: {config.trading.currency}{avg_pnl:.2f} | Sharpe: {avg_sharpe:.2f} | Sortino: {avg_sortino:.2f}")
-        print(f"Max Drawdown: {config.trading.currency}{avg_dd:.2f} | Hit Rate: {avg_hit_rate:.1f}% | Avg Hours Traded: {avg_traded:.1f}%")
-        print(f"=========================================")
+        print("\n" + "="*50)
+        print("average results across folds:")
+        print(f"pnl: {config.trading.currency}{avg_pnl:.2f} | sharpe: {avg_sharpe:.2f} | sortino: {avg_sortino:.2f}")
+        print(f"drawdown: {config.trading.currency}{avg_dd:.2f} | hit rate: {avg_hit_rate:.1f}% | hours traded: {avg_traded:.1f}%")
+        print("="*50)
         
-        # Log average metrics to MLflow
         mlflow.log_metric("avg_PnL", avg_pnl)
         mlflow.log_metric("avg_Sharpe", avg_sharpe)
         mlflow.log_metric("avg_Sortino", avg_sortino)
@@ -290,7 +247,7 @@ def main():
         mlflow.log_metric("avg_MaxDD", avg_dd)
         mlflow.log_metric("avg_PercentTraded", avg_traded)
 
-        print("Run complete. Compare the Drawdown to your previous baseline!")
+        print("\ntraining complete. check mlflow for detailed results.")
 
 if __name__ == "__main__":
     main()
