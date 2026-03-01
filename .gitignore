@@ -21,6 +21,8 @@ __pycache__/
 # notes
 notes.md
 roadmap.md
+ARCHITECTURE.md
+IMPLEMENTATION_PLAN.md
 
 mlruns/
 temp_plots/
