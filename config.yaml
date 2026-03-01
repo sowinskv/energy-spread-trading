@@ -22,18 +22,23 @@ cv:
 
 model:
   n_estimators: 100
-  max_depth: 4
-  learning_rate: 0.0103
-  subsample: 0.6192
+  max_depth: 8
+  learning_rate: 0.0156
+  subsample: 0.8418
   colsample_bytree: 0.8
   random_state: 42
 
 meta_model:
-  n_estimators: 200
-  max_depth: 4
-  learning_rate: 0.0156
+  n_estimators: 100
+  max_depth: 3
+  learning_rate: 0.0442
   random_state: 42
-  confidence_threshold: 0.4283
+  confidence_threshold: 0.4316
+
+trading:
+  position_size_mwh: 100
+  cost_per_mwh: 0.5
+  currency: "EUR" # Assumed currency - EU Market Coupling uses EUR for all settlements
 
 mlflow:
   experiment_name: "Day_Ahead_Intraday_Spread"

@@ -29,9 +29,12 @@ def asymmetric_trading_loss(y_true, y_pred):
     hess = hess * magnitude_weight
     return grad, hess
 
-def calculate_meta_trading_metrics(y_true, y_pred, meta_probs, confidence_threshold=0.5, cost_per_mwh=0.5):
+def calculate_meta_trading_metrics(y_true, y_pred, meta_probs, confidence_threshold=0.5, cost_per_mwh=0.5, position_size_mwh=1):
     """
     Calculates PnL but ONLY takes the trade if the Meta-Model is confident.
+    
+    IMPORTANT: Assumes prices are in EUR/MWh (standard for EU Market Coupling).
+    All P&L calculations return EUR values based on SDAC/IDA price spreads.
     """
     y_true_np = np.array(y_true)
     y_pred_np = np.array(y_pred)
@@ -43,8 +46,8 @@ def calculate_meta_trading_metrics(y_true, y_pred, meta_probs, confidence_thresh
     # the manager's veto power (1 = trade, 0 = sit out)
     trade_mask = (meta_probs_np > confidence_threshold).astype(int)
     
-    # actual executed position
-    actual_position = intended_position * trade_mask
+    # actual executed position (scaled by position size)
+    actual_position = intended_position * trade_mask * position_size_mwh
     
     # we only pay fees when we actually trade
     raw_pnl = actual_position * y_true_np
@@ -62,7 +65,7 @@ def calculate_meta_trading_metrics(y_true, y_pred, meta_probs, confidence_thresh
     drawdown = equity_curve - running_max
     max_dd = drawdown.min()
     
-    # Trades executed %
+    # trades executed %
     pct_traded = np.mean(trade_mask) * 100
     
     return {
@@ -129,6 +132,11 @@ def get_purged_walk_forward_splits(df_length, train_days, test_days, purge_days,
     return splits[::-1]
 
 def main():
+    """main training pipeline with meta-labeling approach.
+    
+    CURRENCY ASSUMPTION: all price data assumed to be in EUR/MWh as per
+    European Market Coupling standards (SDAC uses EUR for settlement).
+    """
     config = OmegaConf.load("config.yaml")
     mlflow.set_experiment(config.mlflow.experiment_name)
     
@@ -219,7 +227,9 @@ def main():
                 y_test, 
                 test_analyst_preds, 
                 test_manager_probs, 
-                confidence_threshold=config.meta_model.confidence_threshold
+                confidence_threshold=config.meta_model.confidence_threshold,
+                cost_per_mwh=config.trading.cost_per_mwh,
+                position_size_mwh=config.trading.position_size_mwh
             )
             
             fold_pnls.append(metrics['total_pnl'])
@@ -230,14 +240,14 @@ def main():
             mlflow.log_metric(f"fold_{fold}_PnL", metrics['total_pnl'])
             mlflow.log_metric(f"fold_{fold}_MaxDD", metrics['max_drawdown'])
             
-            print(f"Trading-> PnL: €{metrics['total_pnl']:.2f} | Sharpe: {metrics['sharpe_ratio']:.2f}")
-            print(f"Risk   -> Max Drawdown: €{metrics['max_drawdown']:.2f} | Traded: {metrics['percent_traded']:.1f}% of hours")
+            print(f"Trading-> PnL: {config.trading.currency}{metrics['total_pnl']:.2f} | Sharpe: {metrics['sharpe_ratio']:.2f}")
+            print(f"Risk   -> Max Drawdown: {config.trading.currency}{metrics['max_drawdown']:.2f} | Traded: {metrics['percent_traded']:.1f}% of hours")
 
         # AVERAGE METRICS
         print(f"\n=========================================")
         print(f"META-LABELING AVERAGE TRADING:")
-        print(f"PnL: €{np.mean(fold_pnls):.2f} | Sharpe: {np.mean(fold_sharpes):.2f}")
-        print(f"Max Drawdown: €{np.mean(fold_dds):.2f} | Avg Hours Traded: {np.mean(fold_traded):.1f}%")
+        print(f"PnL: {config.trading.currency}{np.mean(fold_pnls):.2f} | Sharpe: {np.mean(fold_sharpes):.2f}")
+        print(f"Max Drawdown: {config.trading.currency}{np.mean(fold_dds):.2f} | Avg Hours Traded: {np.mean(fold_traded):.1f}%")
         print(f"=========================================")
 
         print("Run complete. Compare the Drawdown to your previous baseline!")
