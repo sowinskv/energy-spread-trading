@@ -110,6 +110,7 @@ def calculate_enhanced_meta_trading_metrics(y_true, y_pred, meta_probs, confiden
     else:
         dynamic_threshold = confidence_threshold
     
+    smooth_window = 4
     if len(y_pred_np) >= smooth_window:
         y_pred_4h = pd.Series(y_pred_np).rolling(smooth_window, min_periods=1).mean().values
         consensus_mask = multi_horizon_consensus(y_pred_np, y_pred_4h)
