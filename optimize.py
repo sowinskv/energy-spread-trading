@@ -7,38 +7,28 @@ from sklearn.pipeline import Pipeline
 from features import TimeSeriesImputer, EnergyFeatureEngineer
 import warnings
 
-# so we can read only the optuna logs
 warnings.filterwarnings("ignore")
 
 def load_and_format_raw_data(filepath):
     print("loading raw data and formatting...")
     df = pd.read_csv(filepath, low_memory=False)
     
-    # 1. string to float conversion (handling european commas)
     cols_to_exclude = ['date_cet', 'IS_ACTIVE_DOWN_SDAC_PL', 'IS_ACTIVE_UP_SDAC_PL']
     numeric_cols = [col for col in df.columns if col not in cols_to_exclude]
     for col in numeric_cols:
         df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '.'), errors='coerce')
         
-    # 2. boolean mapping
     for col in ['IS_ACTIVE_DOWN_SDAC_PL', 'IS_ACTIVE_UP_SDAC_PL']:
         df[col] = df[col].map({'TRUE': 1, 'FALSE': 0, True: 1, False: 0}).fillna(0).astype(int)
         
-    # 3. datetime indexing & deduplication
     df['date_cet'] = pd.to_datetime(df['date_cet'])
     df.set_index('date_cet', inplace=True)
     if df.index.duplicated().any():
         df = df.groupby(df.index).first()
     df = df.asfreq('h')
     
-    # 4. create the target variable
     df['spread_SDAC_IDA1_PL'] = df['SDAC_PL'] - df['IDA1_PL']
-    
-    # fix: patch up any NaNs in the target caused by missing exchange data or df.asfreq('h')
     df['spread_SDAC_IDA1_PL'] = df['spread_SDAC_IDA1_PL'].interpolate(method='linear', limit_direction='both')
-    
-    # 5. create target lags BEFORE the target is separated from X
-    # strictly shifting by 24+ hours so we don't accidentally look into the future
     df['target_lag_24h'] = df['spread_SDAC_IDA1_PL'].shift(24)
     df['target_lag_48h'] = df['spread_SDAC_IDA1_PL'].shift(48)
     df['target_lag_168h'] = df['spread_SDAC_IDA1_PL'].shift(168)
@@ -49,7 +39,6 @@ def load_and_format_raw_data(filepath):
     
     return df
 
-# 1. grab our custom math and logic
 def asymmetric_trading_loss(y_true, y_pred):
     residual = y_pred - y_true
     grad = residual.copy()
@@ -101,7 +90,6 @@ def get_purged_walk_forward_splits(df_length, train_days, test_days, purge_days,
         splits.append((np.arange(train_start, train_end), np.arange(test_start, test_end)))
     return splits[::-1]
 
-# 2. load data once up top so we don't waste time reloading every trial
 config = OmegaConf.load("config.yaml")
 df = load_and_format_raw_data(config.data.file_path)
 X_full = df.drop(columns=config.data.leakage_cols)
@@ -116,9 +104,7 @@ splits = get_purged_walk_forward_splits(
     n_splits=config.cv.n_splits
 )
 
-# 3. the optuna playground
 def objective(trial):
-    # a. tweak the analyst's brain
     analyst_params = {
         'n_estimators': trial.suggest_int('analyst_n_estimators', 100, 300, step=50),
         'max_depth': trial.suggest_int('analyst_max_depth', 4, 9),
@@ -127,7 +113,6 @@ def objective(trial):
         'random_state': 42
     }
     
-    # b. tweak the manager's brain (keeping it shallow so it doesn't overthink)
     manager_params = {
         'n_estimators': trial.suggest_int('manager_n_estimators', 50, 200, step=50),
         'max_depth': trial.suggest_int('manager_max_depth', 2, 5), 
@@ -135,7 +120,6 @@ def objective(trial):
         'random_state': 42
     }
     
-    # c. figure out the sweet spot for the confidence threshold
     confidence_threshold = trial.suggest_float('confidence_threshold', 0.35, 0.75)
     
     fold_sharpes = []
@@ -162,51 +146,42 @@ def objective(trial):
         X_test_prep = preprocessor.transform(test_df.drop(columns=config.data.leakage_cols))
         y_test = test_df[config.data.target_col]
 
-        # let the analyst learn
         analyst = xgb.XGBRegressor(**analyst_params, objective=asymmetric_trading_loss)
         analyst.fit(X_prim_prep, y_prim)
         
-        # grade the analyst to create training data for the manager
         meta_analyst_preds = analyst.predict(X_meta_prep)
         meta_raw_pnl = np.sign(meta_analyst_preds) * y_meta - 0.5
         meta_labels = (meta_raw_pnl > 0).astype(int)
         
-        # let the manager learn from the analyst's mistakes
         X_meta_enhanced = X_meta_prep.copy()
         X_meta_enhanced['analyst_pred'] = meta_analyst_preds
         manager = xgb.XGBClassifier(**manager_params)
         manager.fit(X_meta_enhanced, meta_labels)
         
-        # put them both to the test
         test_analyst_preds = analyst.predict(X_test_prep)
         X_test_enhanced = X_test_prep.copy()
         X_test_enhanced['analyst_pred'] = test_analyst_preds
         test_manager_probs = manager.predict_proba(X_test_enhanced)[:, 1]
         
-        # how much money did we actually make?
         sharpe = calculate_meta_trading_metrics(y_test, test_analyst_preds, test_manager_probs, confidence_threshold)
         fold_sharpes.append(sharpe)
         
-    # the whole point is to pump up that sharpe ratio
     return np.mean(fold_sharpes)
 
 if __name__ == "__main__":
-    print("running the optuna script...")
+    print("running optuna optimization...")
     
-    # we want the highest sharpe possible
     study = optuna.create_study(direction='maximize')
-    
-    # run 30 trials (bump this up if you're letting it run overnight)
     study.optimize(objective, n_trials=100)
     
-    print("\n" + "="*40)
-    print("aaand we're done. here's the alpha:")
+    print("\n" + "="*50)
+    print("optimization complete. best results:")
     print(f"best cv sharpe ratio: {study.best_value:.2f}")
-    print("\nthe winning combo:")
+    print("\noptimal parameters:")
     for key, value in study.best_params.items():
         if isinstance(value, float):
             print(f"  {key}: {value:.4f}")
         else:
             print(f"  {key}: {value}")
-    print("="*40)
-    print("go drop these into your config.yaml and you're golden.")
+    print("="*50)
+    print("update your config.yaml with these parameters.")
