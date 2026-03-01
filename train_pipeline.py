@@ -7,6 +7,67 @@ from sklearn.pipeline import Pipeline
 from features import TimeSeriesImputer, EnergyFeatureEngineer
 
 
+def confidence_based_position_sizing(meta_probs, base_position=1.0, min_confidence=0.5, max_multiplier=2.0):
+    confidence_excess = np.maximum(0, meta_probs - min_confidence)
+    confidence_normalized = confidence_excess / (1 - min_confidence)
+    
+    multipliers = 1.0 + (max_multiplier - 1.0) * confidence_normalized
+    positions = base_position * multipliers
+    
+    return np.clip(positions, 0.1, max_multiplier * base_position)
+
+
+def detect_market_volatility_regime(returns, window=72):
+    if len(returns) < window:
+        return 'normal'
+        
+    recent_vol = returns.rolling(window).std().iloc[-1]
+    historical_vol = returns.rolling(window*3).std().mean()
+    
+    vol_ratio = recent_vol / historical_vol if historical_vol > 0 else 1.0
+    
+    if vol_ratio > 1.5:
+        return 'high_vol'  
+    elif vol_ratio < 0.7:
+        return 'low_vol'   
+    else:
+        return 'normal'
+
+
+def multi_horizon_consensus(predictions_1h, predictions_4h, consensus_threshold=0.75):
+    """
+    Only trade when multiple time horizons agree on direction.
+    This improves hit rate by filtering out noisy signals.
+    """
+    direction_1h = np.sign(predictions_1h)
+    direction_4h = np.sign(predictions_4h)
+    
+    agreement = (direction_1h == direction_4h) & (direction_1h != 0)
+    
+    consensus_strength = (np.abs(predictions_1h) + np.abs(predictions_4h)) / 2
+    strong_consensus = consensus_strength > np.percentile(consensus_strength, 75)
+    
+    return agreement & strong_consensus
+
+
+def optimal_trading_hours(timestamp_index):
+    """
+    Identify optimal trading hours based on market activity.
+    Avoid trading during low-liquidity periods.
+    """
+    hours = timestamp_index.hour
+    weekday = timestamp_index.dayofweek
+    
+    active_hours = (hours >= 6) & (hours <= 22)
+    active_days = weekday < 5  
+    
+    peak_morning = (hours >= 8) & (hours <= 10)
+    peak_evening = (hours >= 18) & (hours <= 20)
+    peak_hours = peak_morning | peak_evening
+    
+    return active_hours & active_days, peak_hours & active_days
+
+
 def asymmetric_trading_loss(y_true, y_pred):
     residual = y_pred - y_true
     grad = residual.copy()
@@ -25,23 +86,61 @@ def asymmetric_trading_loss(y_true, y_pred):
     hess = hess * magnitude_weight
     return grad, hess
 
-def calculate_meta_trading_metrics(y_true, y_pred, meta_probs, confidence_threshold=0.5, cost_per_mwh=0.5, position_size_mwh=1):
+def calculate_enhanced_meta_trading_metrics(y_true, y_pred, meta_probs, confidence_threshold=0.5, 
+                                          cost_per_mwh=0.5, position_size_mwh=1.0,
+                                          use_dynamic_thresholds=True, use_confidence_sizing=True,
+                                          timestamps=None):
     """
-    Calculates PnL but ONLY takes the trade if the Meta-Model is confident.
-    
-    IMPORTANT: Assumes prices are in EUR/MWh (standard for EU Market Coupling).
-    All P&L calculations return EUR values based on SDAC/IDA price spreads.
+    Enhanced trading with multiple profit/hit rate optimization techniques.
     """
     y_true_np = np.array(y_true)
     y_pred_np = np.array(y_pred)
     meta_probs_np = np.array(meta_probs)
     
-    intended_position = np.sign(y_pred_np)
-    trade_mask = (meta_probs_np > confidence_threshold).astype(int)
-    actual_position = intended_position * trade_mask * position_size_mwh
+    if use_dynamic_thresholds and len(y_true_np) > 100:
+        returns = pd.Series(y_true_np)
+        regime = detect_market_volatility_regime(returns)
+        
+        regime_adjustments = {
+            'low_vol': 0.8,    
+            'normal': 1.0,     
+            'high_vol': 1.3   
+        }
+        dynamic_threshold = confidence_threshold * regime_adjustments[regime]
+    else:
+        dynamic_threshold = confidence_threshold
     
+    if len(y_pred_np) >= smooth_window:
+        y_pred_4h = pd.Series(y_pred_np).rolling(smooth_window, min_periods=1).mean().values
+        consensus_mask = multi_horizon_consensus(y_pred_np, y_pred_4h)
+    else:
+        consensus_mask = np.ones_like(y_pred_np, dtype=bool)
+    
+    if timestamps is not None:
+        active_hours, peak_hours = optimal_trading_hours(timestamps)
+        timing_multiplier = np.where(peak_hours, 1.2, np.where(active_hours, 1.0, 0.3))
+    else:
+        timing_multiplier = np.ones_like(y_pred_np)
+    
+    base_trade_mask = (meta_probs_np > dynamic_threshold).astype(int)
+    consensus_trade_mask = base_trade_mask * consensus_mask.astype(int)
+    final_trade_mask = consensus_trade_mask
+    
+    intended_position = np.sign(y_pred_np)
+    
+    if use_confidence_sizing:
+        position_sizes = confidence_based_position_sizing(
+            meta_probs_np, 
+            base_position=position_size_mwh,
+            max_multiplier=2.0
+        )
+        position_sizes = position_sizes * timing_multiplier
+    else:
+        position_sizes = np.full_like(y_pred_np, position_size_mwh)
+    
+    actual_position = intended_position * final_trade_mask * position_sizes
     raw_pnl = actual_position * y_true_np
-    fees = trade_mask * cost_per_mwh
+    fees = final_trade_mask * cost_per_mwh * np.abs(actual_position)
     net_pnl = pd.Series(raw_pnl - fees)
     
     equity_curve = net_pnl.cumsum()
@@ -55,9 +154,10 @@ def calculate_meta_trading_metrics(y_true, y_pred, meta_probs, confidence_thresh
     drawdown = equity_curve - running_max
     max_dd = drawdown.min()
     
-    pct_traded = np.mean(trade_mask) * 100
+    pct_traded = np.mean(final_trade_mask) * 100
+    avg_position_size = np.mean(position_sizes[final_trade_mask == 1]) if np.sum(final_trade_mask) > 0 else 0
     
-    executed_trades = net_pnl[trade_mask == 1]
+    executed_trades = net_pnl[final_trade_mask == 1]
     if len(executed_trades) > 0:
         hit_rate = (executed_trades > 0).mean() * 100
     else:
@@ -78,7 +178,10 @@ def calculate_meta_trading_metrics(y_true, y_pred, meta_probs, confidence_thresh
         "sortino_ratio": sortino,
         "hit_rate": hit_rate,
         "max_drawdown": max_dd,
-        "percent_traded": pct_traded
+        "percent_traded": pct_traded,
+        "avg_position_size": avg_position_size,
+        "total_trades": int(np.sum(final_trade_mask)),
+        "consensus_trades": int(np.sum(consensus_mask & (base_trade_mask == 1)))
     }
 
 def load_and_format_raw_data(filepath):
@@ -163,6 +266,7 @@ def main():
 
         fold_pnls, fold_sharpes, fold_dds, fold_traded = [], [], [], []
         fold_hit_rates, fold_sortinos = [], []
+        fold_position_sizes, fold_total_trades, fold_consensus_trades = [], [], []
 
         print("starting cross-validation pipeline...")
 
@@ -210,13 +314,19 @@ def main():
             X_test_enhanced['analyst_pred'] = test_analyst_preds
             
             test_manager_probs = manager.predict_proba(X_test_enhanced)[:, 1]
-            metrics = calculate_meta_trading_metrics(
+            
+            test_timestamps = test_df.index if hasattr(test_df, 'index') else None
+            
+            metrics = calculate_enhanced_meta_trading_metrics(
                 y_test, 
                 test_analyst_preds, 
                 test_manager_probs, 
                 confidence_threshold=config.meta_model.confidence_threshold,
                 cost_per_mwh=config.trading.cost_per_mwh,
-                position_size_mwh=config.trading.position_size_mwh
+                position_size_mwh=config.trading.position_size_mwh,
+                use_dynamic_thresholds=True,
+                use_confidence_sizing=True,
+                timestamps=test_timestamps
             )
             
             fold_pnls.append(metrics['total_pnl'])
@@ -225,14 +335,21 @@ def main():
             fold_traded.append(metrics['percent_traded'])
             fold_hit_rates.append(metrics['hit_rate'])
             fold_sortinos.append(metrics['sortino_ratio'])
+            fold_position_sizes.append(metrics['avg_position_size'])
+            fold_total_trades.append(metrics['total_trades'])
+            fold_consensus_trades.append(metrics['consensus_trades'])
             
             mlflow.log_metric(f"fold_{fold}_PnL", metrics['total_pnl'])
             mlflow.log_metric(f"fold_{fold}_MaxDD", metrics['max_drawdown'])
             mlflow.log_metric(f"fold_{fold}_HitRate", metrics['hit_rate'])
             mlflow.log_metric(f"fold_{fold}_Sortino", metrics['sortino_ratio'])
+            mlflow.log_metric(f"fold_{fold}_AvgPositionSize", metrics['avg_position_size'])
+            mlflow.log_metric(f"fold_{fold}_TotalTrades", metrics['total_trades'])
+            mlflow.log_metric(f"fold_{fold}_ConsensusRate", metrics['consensus_trades'] / max(1, metrics['total_trades']))
             
             print(f"pnl: {config.trading.currency}{metrics['total_pnl']:.2f} | sharpe: {metrics['sharpe_ratio']:.2f} | sortino: {metrics['sortino_ratio']:.2f}")
             print(f"drawdown: {config.trading.currency}{metrics['max_drawdown']:.2f} | hit rate: {metrics['hit_rate']:.1f}% | traded: {metrics['percent_traded']:.1f}%")
+            print(f"trades: {metrics['total_trades']} | avg size: {metrics['avg_position_size']:.2f} | consensus: {metrics['consensus_trades']}/{metrics['total_trades']}")
 
         avg_pnl = np.mean(fold_pnls)
         avg_sharpe = np.mean(fold_sharpes)
@@ -240,11 +357,15 @@ def main():
         avg_hit_rate = np.mean(fold_hit_rates)
         avg_dd = np.mean(fold_dds)
         avg_traded = np.mean(fold_traded)
+        avg_position_size = np.mean(fold_position_sizes)
+        avg_total_trades = np.mean(fold_total_trades)
+        avg_consensus_rate = np.mean([c/max(1,t) for c,t in zip(fold_consensus_trades, fold_total_trades)])
         
         print("\n" + "="*50)
-        print("average results across folds:")
+        print("enhanced trading results with profit optimization:")
         print(f"pnl: {config.trading.currency}{avg_pnl:.2f} | sharpe: {avg_sharpe:.2f} | sortino: {avg_sortino:.2f}")
         print(f"drawdown: {config.trading.currency}{avg_dd:.2f} | hit rate: {avg_hit_rate:.1f}% | hours traded: {avg_traded:.1f}%")
+        print(f"avg trades per fold: {avg_total_trades:.0f} | avg size: {avg_position_size:.2f} | consensus rate: {avg_consensus_rate:.1%}")
         print("="*50)
         
         mlflow.log_metric("avg_PnL", avg_pnl)
@@ -253,6 +374,9 @@ def main():
         mlflow.log_metric("avg_HitRate", avg_hit_rate)
         mlflow.log_metric("avg_MaxDD", avg_dd)
         mlflow.log_metric("avg_PercentTraded", avg_traded)
+        mlflow.log_metric("avg_PositionSize", avg_position_size)
+        mlflow.log_metric("avg_TotalTrades", avg_total_trades)
+        mlflow.log_metric("avg_ConsensusRate", avg_consensus_rate)
 
         print("\ntraining complete. check mlflow for detailed results.")
 
