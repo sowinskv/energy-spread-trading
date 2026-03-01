@@ -36,7 +36,7 @@ meta_model:
   confidence_threshold: 0.4316
 
 trading:
-  position_size_mwh: 100
+  position_size_mwh: 1
   cost_per_mwh: 0.5
   currency: "EUR" # Assumed currency - EU Market Coupling uses EUR for all settlements
 

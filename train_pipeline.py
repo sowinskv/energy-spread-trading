@@ -68,9 +68,29 @@ def calculate_meta_trading_metrics(y_true, y_pred, meta_probs, confidence_thresh
     # trades executed %
     pct_traded = np.mean(trade_mask) * 100
     
+    # Hit rate: percentage of profitable trades
+    executed_trades = net_pnl[trade_mask == 1]  # only consider executed trades
+    if len(executed_trades) > 0:
+        hit_rate = (executed_trades > 0).mean() * 100  # percentage of winning trades
+    else:
+        hit_rate = 0
+    
+    # Sortino ratio: like Sharpe but only considers downside volatility
+    if len(net_pnl) > 0:
+        downside_returns = net_pnl[net_pnl < 0]  # only negative returns
+        if len(downside_returns) > 0 and downside_returns.std() != 0:
+            sortino = (net_pnl.mean() / downside_returns.std()) * np.sqrt(8760)
+        else:
+            # If no downside returns, set to a high value or same as sharpe
+            sortino = sharpe if sharpe != 0 else 0
+    else:
+        sortino = 0
+    
     return {
         "total_pnl": equity_curve.iloc[-1] if len(equity_curve) > 0 else 0,
         "sharpe_ratio": sharpe,
+        "sortino_ratio": sortino,
+        "hit_rate": hit_rate,
         "max_drawdown": max_dd,
         "percent_traded": pct_traded
     }
@@ -158,6 +178,7 @@ def main():
         )
 
         fold_pnls, fold_sharpes, fold_dds, fold_traded = [], [], [], []
+        fold_hit_rates, fold_sortinos = [], []
 
         print(f"Starting Meta-Labeling CV Pipeline...")
 
@@ -236,19 +257,38 @@ def main():
             fold_sharpes.append(metrics['sharpe_ratio'])
             fold_dds.append(metrics['max_drawdown'])
             fold_traded.append(metrics['percent_traded'])
+            fold_hit_rates.append(metrics['hit_rate'])
+            fold_sortinos.append(metrics['sortino_ratio'])
             
             mlflow.log_metric(f"fold_{fold}_PnL", metrics['total_pnl'])
             mlflow.log_metric(f"fold_{fold}_MaxDD", metrics['max_drawdown'])
+            mlflow.log_metric(f"fold_{fold}_HitRate", metrics['hit_rate'])
+            mlflow.log_metric(f"fold_{fold}_Sortino", metrics['sortino_ratio'])
             
-            print(f"Trading-> PnL: {config.trading.currency}{metrics['total_pnl']:.2f} | Sharpe: {metrics['sharpe_ratio']:.2f}")
-            print(f"Risk   -> Max Drawdown: {config.trading.currency}{metrics['max_drawdown']:.2f} | Traded: {metrics['percent_traded']:.1f}% of hours")
+            print(f"Trading-> PnL: {config.trading.currency}{metrics['total_pnl']:.2f} | Sharpe: {metrics['sharpe_ratio']:.2f} | Sortino: {metrics['sortino_ratio']:.2f}")
+            print(f"Risk   -> Max Drawdown: {config.trading.currency}{metrics['max_drawdown']:.2f} | Hit Rate: {metrics['hit_rate']:.1f}% | Traded: {metrics['percent_traded']:.1f}% of hours")
 
         # AVERAGE METRICS
+        avg_pnl = np.mean(fold_pnls)
+        avg_sharpe = np.mean(fold_sharpes)
+        avg_sortino = np.mean(fold_sortinos)
+        avg_hit_rate = np.mean(fold_hit_rates)
+        avg_dd = np.mean(fold_dds)
+        avg_traded = np.mean(fold_traded)
+        
         print(f"\n=========================================")
         print(f"META-LABELING AVERAGE TRADING:")
-        print(f"PnL: {config.trading.currency}{np.mean(fold_pnls):.2f} | Sharpe: {np.mean(fold_sharpes):.2f}")
-        print(f"Max Drawdown: {config.trading.currency}{np.mean(fold_dds):.2f} | Avg Hours Traded: {np.mean(fold_traded):.1f}%")
+        print(f"PnL: {config.trading.currency}{avg_pnl:.2f} | Sharpe: {avg_sharpe:.2f} | Sortino: {avg_sortino:.2f}")
+        print(f"Max Drawdown: {config.trading.currency}{avg_dd:.2f} | Hit Rate: {avg_hit_rate:.1f}% | Avg Hours Traded: {avg_traded:.1f}%")
         print(f"=========================================")
+        
+        # Log average metrics to MLflow
+        mlflow.log_metric("avg_PnL", avg_pnl)
+        mlflow.log_metric("avg_Sharpe", avg_sharpe)
+        mlflow.log_metric("avg_Sortino", avg_sortino)
+        mlflow.log_metric("avg_HitRate", avg_hit_rate)
+        mlflow.log_metric("avg_MaxDD", avg_dd)
+        mlflow.log_metric("avg_PercentTraded", avg_traded)
 
         print("Run complete. Compare the Drawdown to your previous baseline!")
 
