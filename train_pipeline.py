@@ -8,6 +8,81 @@ from features import TimeSeriesImputer, EnergyFeatureEngineer
 from ensemble_models import EnsembleAnalyst, MultiHorizonEnsemble
 
 
+class TrailingStopManager:
+    def __init__(self, config):
+        self.initial_stop_pct = config.exit_rules.trailing_stop.initial_stop
+        self.trail_pct = config.exit_rules.trailing_stop.trail_amount
+        self.highest_profits = {}
+
+    def update_stops(self, position_ids, current_profits):
+        exits = []
+        for pos_id, profit in zip(position_ids, current_profits):
+            if pos_id not in self.highest_profits:
+                self.highest_profits[pos_id] = profit
+
+            if profit > self.highest_profits[pos_id]:
+                self.highest_profits[pos_id] = profit
+
+            if self.highest_profits[pos_id] > self.initial_stop_pct:
+                stop_level = self.highest_profits[pos_id] - self.trail_pct
+                if profit <= stop_level:
+                    exits.append(pos_id)
+                    del self.highest_profits[pos_id]
+        return exits
+
+
+def calculate_dynamic_exits(positions, prices, timestamps, entry_prices, entry_times, config):
+    exits = np.zeros_like(positions)
+    current_pnl = (prices - entry_prices) * np.sign(positions)
+    position_age_hours = (timestamps - entry_times).dt.total_seconds() / 3600
+
+    for i in range(len(positions)):
+        if positions[i] != 0:
+            if abs(entry_prices[i]) > 0:
+                profit_pct = (current_pnl[i] / abs(entry_prices[i])) * 100
+            else:
+                profit_pct = 0
+            age = position_age_hours[i]
+
+            if (age >= config.exit_rules.time_based.profit_take_hours and 
+                profit_pct >= config.exit_rules.time_based.profit_take_threshold):
+                exits[i] = 1
+                continue
+
+            stop_loss_pct = (config.exit_rules.time_based.initial_stop_loss + 
+                           age * config.exit_rules.time_based.stop_loss_decay)
+            if profit_pct <= stop_loss_pct:
+                exits[i] = 1
+                continue
+
+            if age >= config.exit_rules.time_based.max_hold_hours:
+                exits[i] = 1
+                continue
+    return exits
+
+
+def consensus_exit_rules(current_positions, predictions_1h, predictions_4h, config):
+    """More conservative consensus exit rules"""
+    exits = np.zeros_like(current_positions)
+    direction_1h = np.sign(predictions_1h)
+    direction_4h = np.sign(predictions_4h)
+    
+    confidence_threshold = config.exit_rules.position_management.confidence_exit_threshold
+    avg_confidence = (np.abs(predictions_1h) + np.abs(predictions_4h)) / 2
+    very_low_confidence = avg_confidence < (confidence_threshold * 0.5)  # Only exit on very low confidence
+
+    for i in range(len(current_positions)):
+        if current_positions[i] != 0:
+            position_direction = np.sign(current_positions[i])
+
+            # Only exit if BOTH conditions are met: very low confidence AND strong opposing signals
+            if (very_low_confidence[i] and 
+                direction_1h[i] == -position_direction and 
+                direction_4h[i] == -position_direction):
+                exits[i] = 1
+    return exits
+
+
 def confidence_based_position_sizing(meta_probs, base_position=1.0, min_confidence=0.5, max_multiplier=2.0):
     confidence_excess = np.maximum(0, meta_probs - min_confidence)
     confidence_normalized = confidence_excess / (1 - min_confidence)
@@ -79,10 +154,12 @@ def asymmetric_trading_loss(y_true, y_pred):
     hess = hess * magnitude_weight
     return grad, hess
 
-def calculate_enhanced_meta_trading_metrics(y_true, y_pred, meta_probs, confidence_threshold=0.5, 
-                                          cost_per_mwh=0.5, position_size_mwh=1.0,
-                                          use_dynamic_thresholds=True, use_confidence_sizing=True,
-                                          timestamps=None):
+def calculate_enhanced_meta_trading_metrics_with_exits(
+    y_true, y_pred, meta_probs, config, confidence_threshold=0.5, 
+    cost_per_mwh=0.5, position_size_mwh=1.0,
+    use_dynamic_thresholds=True, use_confidence_sizing=True,
+    timestamps=None, use_exit_rules=True):
+    
     y_true_np = np.array(y_true)
     y_pred_np = np.array(y_pred)
     meta_probs_np = np.array(meta_probs)
@@ -90,12 +167,7 @@ def calculate_enhanced_meta_trading_metrics(y_true, y_pred, meta_probs, confiden
     if use_dynamic_thresholds and len(y_true_np) > 100:
         returns = pd.Series(y_true_np)
         regime = detect_market_volatility_regime(returns)
-        
-        regime_adjustments = {
-            'low_vol': 0.8,    
-            'normal': 1.0,     
-            'high_vol': 1.3   
-        }
+        regime_adjustments = {'low_vol': 0.8, 'normal': 1.0, 'high_vol': 1.3}
         dynamic_threshold = confidence_threshold * regime_adjustments[regime]
     else:
         dynamic_threshold = confidence_threshold
@@ -115,24 +187,107 @@ def calculate_enhanced_meta_trading_metrics(y_true, y_pred, meta_probs, confiden
     
     base_trade_mask = (meta_probs_np > dynamic_threshold).astype(int)
     consensus_trade_mask = base_trade_mask * consensus_mask.astype(int)
-    final_trade_mask = consensus_trade_mask
-    
-    intended_position = np.sign(y_pred_np)
     
     if use_confidence_sizing:
         position_sizes = confidence_based_position_sizing(
-            meta_probs_np, 
-            base_position=position_size_mwh,
-            max_multiplier=2.0
+            meta_probs_np, base_position=position_size_mwh, max_multiplier=2.0
         )
         position_sizes = position_sizes * timing_multiplier
     else:
         position_sizes = np.full_like(y_pred_np, position_size_mwh)
     
-    actual_position = intended_position * final_trade_mask * position_sizes
-    raw_pnl = actual_position * y_true_np
-    fees = final_trade_mask * cost_per_mwh * np.abs(actual_position)
-    net_pnl = pd.Series(raw_pnl - fees)
+    if not use_exit_rules:
+        intended_position = np.sign(y_pred_np)
+        actual_position = intended_position * consensus_trade_mask * position_sizes
+        raw_pnl = actual_position * y_true_np
+        fees = consensus_trade_mask * cost_per_mwh * np.abs(actual_position)
+        net_pnl = pd.Series(raw_pnl - fees)
+    else:
+        net_pnl = []
+        active_positions = {}
+        position_history = []
+        trailing_stop = TrailingStopManager(config) if config.exit_rules.trailing_stop.enable else None
+        max_positions = config.exit_rules.max_concurrent_positions
+        
+        for i in range(len(y_true_np)):
+            current_price = y_true_np[i]
+            current_time = timestamps[i] if timestamps is not None else i
+            
+            position_ids = list(active_positions.keys())
+            if position_ids and use_exit_rules:
+                entry_prices = [pos['entry_price'] for pos in active_positions.values()]
+                entry_times = [pos['entry_time'] for pos in active_positions.values()]
+                positions_array = [pos['size'] * pos['direction'] for pos in active_positions.values()]
+                
+                if timestamps is not None:
+                    exits_time = calculate_dynamic_exits(
+                        np.array(positions_array), 
+                        np.full(len(positions_array), current_price),
+                        pd.Series([current_time] * len(positions_array)),
+                        np.array(entry_prices),
+                        pd.Series(entry_times),
+                        config
+                    )
+                else:
+                    exits_time = np.zeros(len(positions_array))
+                
+                if (config.exit_rules.position_management.enable_consensus_exits and 
+                    i >= smooth_window):
+                    exits_consensus = consensus_exit_rules(
+                        np.array(positions_array),
+                        np.array([y_pred_np[i]] * len(positions_array)),
+                        np.array([y_pred_4h[i]] * len(positions_array)),
+                        config
+                    )
+                else:
+                    exits_consensus = np.zeros(len(positions_array))
+                
+                trailing_exits = []
+                if trailing_stop:
+                    current_profits = [(current_price - pos['entry_price']) * pos['direction'] * pos['size'] - cost_per_mwh * pos['size'] 
+                                     for pos in active_positions.values()]
+                    trailing_exits = trailing_stop.update_stops(position_ids, current_profits)
+                
+                exit_mask = (exits_time == 1) | (exits_consensus == 1)
+                for j, pos_id in enumerate(position_ids):
+                    if exit_mask[j] or pos_id in trailing_exits:
+                        pos = active_positions[pos_id]
+                        exit_pnl = (current_price - pos['entry_price']) * pos['direction'] * pos['size'] - cost_per_mwh * pos['size']
+                        position_history.append({
+                            'entry_time': pos['entry_time'],
+                            'exit_time': current_time,
+                            'pnl': exit_pnl,
+                            'size': pos['size'],
+                            'direction': pos['direction'],
+                            'exit_reason': 'dynamic_rule'
+                        })
+                        net_pnl.append(exit_pnl)
+                        del active_positions[pos_id]
+            
+            if consensus_trade_mask[i] == 1 and len(active_positions) < max_positions:
+                direction = np.sign(y_pred_np[i])
+                size = position_sizes[i]
+                active_positions[f"{current_time}_{i}"] = {
+                    'entry_price': current_price,
+                    'direction': direction,
+                    'size': size,
+                    'entry_time': current_time
+                }
+        
+        final_price = y_true_np[-1] if len(y_true_np) > 0 else 0
+        for pos in active_positions.values():
+            exit_pnl = (final_price - pos['entry_price']) * pos['direction'] * pos['size'] - cost_per_mwh * pos['size']
+            position_history.append({
+                'entry_time': pos['entry_time'],
+                'exit_time': current_time if 'current_time' in locals() else 'end',
+                'pnl': exit_pnl,
+                'size': pos['size'],
+                'direction': pos['direction'],
+                'exit_reason': 'end_of_period'
+            })
+            net_pnl.append(exit_pnl)
+        
+        net_pnl = pd.Series(net_pnl if net_pnl else [0])
     
     equity_curve = net_pnl.cumsum()
     
@@ -145,14 +300,17 @@ def calculate_enhanced_meta_trading_metrics(y_true, y_pred, meta_probs, confiden
     drawdown = equity_curve - running_max
     max_dd = drawdown.min()
     
-    pct_traded = np.mean(final_trade_mask) * 100
-    avg_position_size = np.mean(position_sizes[final_trade_mask == 1]) if np.sum(final_trade_mask) > 0 else 0
-    
-    executed_trades = net_pnl[final_trade_mask == 1]
-    if len(executed_trades) > 0:
-        hit_rate = (executed_trades > 0).mean() * 100
+    if use_exit_rules:
+        pct_traded = len([p for p in position_history]) / len(y_true_np) * 100 if len(y_true_np) > 0 else 0
+        hit_rate = (net_pnl > 0).mean() * 100 if len(net_pnl) > 0 else 0
+        total_trades = len(position_history)
+        avg_position_size = np.mean([abs(pos['size']) for pos in position_history]) if position_history else 0
     else:
-        hit_rate = 0
+        pct_traded = np.mean(consensus_trade_mask) * 100
+        executed_trades = net_pnl[consensus_trade_mask == 1] if len(net_pnl) == len(consensus_trade_mask) else net_pnl
+        hit_rate = (executed_trades > 0).mean() * 100 if len(executed_trades) > 0 else 0
+        total_trades = int(np.sum(consensus_trade_mask))
+        avg_position_size = np.mean(position_sizes[consensus_trade_mask == 1]) if np.sum(consensus_trade_mask) > 0 else 0
     
     if len(net_pnl) > 0:
         downside_returns = net_pnl[net_pnl < 0]
@@ -171,8 +329,8 @@ def calculate_enhanced_meta_trading_metrics(y_true, y_pred, meta_probs, confiden
         "max_drawdown": max_dd,
         "percent_traded": pct_traded,
         "avg_position_size": avg_position_size,
-        "total_trades": int(np.sum(final_trade_mask)),
-        "consensus_trades": int(np.sum(consensus_mask & (base_trade_mask == 1)))
+        "total_trades": total_trades,
+        "consensus_trades": total_trades if use_exit_rules else int(np.sum(consensus_mask & (base_trade_mask == 1)))
     }
 
 def load_and_format_raw_data(filepath):
@@ -352,16 +510,32 @@ def main():
             
             test_manager_probs = manager.predict_proba(X_test_enhanced)[:, 1]
             
-            metrics = calculate_enhanced_meta_trading_metrics(
+            metrics_no_exits = calculate_enhanced_meta_trading_metrics_with_exits(
                 y_test, 
                 test_analyst_preds, 
                 test_manager_probs, 
+                config,
                 confidence_threshold=config.meta_model.confidence_threshold,
                 cost_per_mwh=config.trading.cost_per_mwh,
                 position_size_mwh=config.trading.position_size_mwh,
                 use_dynamic_thresholds=True,
                 use_confidence_sizing=True,
-                timestamps=test_timestamps
+                timestamps=test_timestamps,
+                use_exit_rules=False
+            )
+            
+            metrics = calculate_enhanced_meta_trading_metrics_with_exits(
+                y_test, 
+                test_analyst_preds, 
+                test_manager_probs, 
+                config,
+                confidence_threshold=config.meta_model.confidence_threshold,
+                cost_per_mwh=config.trading.cost_per_mwh,
+                position_size_mwh=config.trading.position_size_mwh,
+                use_dynamic_thresholds=True,
+                use_confidence_sizing=True,
+                timestamps=test_timestamps,
+                use_exit_rules=config.exit_rules.enable
             )
             
             fold_pnls.append(metrics['total_pnl'])
@@ -375,16 +549,18 @@ def main():
             fold_consensus_trades.append(metrics['consensus_trades'])
             
             mlflow.log_metric(f"fold_{fold}_PnL", metrics['total_pnl'])
+            mlflow.log_metric(f"fold_{fold}_PnL_NoExits", metrics_no_exits['total_pnl'])
             mlflow.log_metric(f"fold_{fold}_MaxDD", metrics['max_drawdown'])
             mlflow.log_metric(f"fold_{fold}_HitRate", metrics['hit_rate'])
+            mlflow.log_metric(f"fold_{fold}_HitRate_NoExits", metrics_no_exits['hit_rate'])
             mlflow.log_metric(f"fold_{fold}_Sortino", metrics['sortino_ratio'])
             mlflow.log_metric(f"fold_{fold}_AvgPositionSize", metrics['avg_position_size'])
             mlflow.log_metric(f"fold_{fold}_TotalTrades", metrics['total_trades'])
             mlflow.log_metric(f"fold_{fold}_ConsensusRate", metrics['consensus_trades'] / max(1, metrics['total_trades']))
             
-            print(f"pnl: {config.trading.currency}{metrics['total_pnl']:.2f} | sharpe: {metrics['sharpe_ratio']:.2f} | sortino: {metrics['sortino_ratio']:.2f}")
-            print(f"drawdown: {config.trading.currency}{metrics['max_drawdown']:.2f} | hit rate: {metrics['hit_rate']:.1f}% | traded: {metrics['percent_traded']:.1f}%")
-            print(f"trades: {metrics['total_trades']} | avg size: {metrics['avg_position_size']:.2f} | consensus: {metrics['consensus_trades']}/{metrics['total_trades']}")
+            print(f"with exits: pnl {config.trading.currency}{metrics['total_pnl']:.2f} | hit rate {metrics['hit_rate']:.1f}% | trades {metrics['total_trades']}")
+            print(f"no exits:   pnl {config.trading.currency}{metrics_no_exits['total_pnl']:.2f} | hit rate {metrics_no_exits['hit_rate']:.1f}% | trades {metrics_no_exits['total_trades']}")
+            print(f"sharpe: {metrics['sharpe_ratio']:.2f} | sortino: {metrics['sortino_ratio']:.2f} | drawdown: {config.trading.currency}{metrics['max_drawdown']:.2f}")
 
         avg_pnl = np.mean(fold_pnls)
         avg_sharpe = np.mean(fold_sharpes)
@@ -397,7 +573,7 @@ def main():
         avg_consensus_rate = np.mean([c/max(1,t) for c,t in zip(fold_consensus_trades, fold_total_trades)])
         
         print("\n" + "="*50)
-        print("results:")
+        print(f"results (exit rules {'enabled' if config.exit_rules.enable else 'disabled'}):")
         print(f"pnl: {config.trading.currency}{avg_pnl:.2f} | sharpe: {avg_sharpe:.2f} | sortino: {avg_sortino:.2f}")
         print(f"drawdown: {config.trading.currency}{avg_dd:.2f} | hit rate: {avg_hit_rate:.1f}% | hours traded: {avg_traded:.1f}%")
         print(f"avg trades per fold: {avg_total_trades:.0f} | avg size: {avg_position_size:.2f} | consensus rate: {avg_consensus_rate:.1%}")
