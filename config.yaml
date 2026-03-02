@@ -22,21 +22,21 @@ cv:
 
 model:
   n_estimators: 100
-  max_depth: 8
-  learning_rate: 0.0156
-  subsample: 0.8418
+  max_depth: 9
+  learning_rate: 0.0323
+  subsample: 0.8230
   colsample_bytree: 0.8
   random_state: 42
 
 meta_model:
-  n_estimators: 100
-  max_depth: 3
-  learning_rate: 0.0442
+  n_estimators: 200
+  max_depth: 4
+  learning_rate: 0.0140
   random_state: 42
-  confidence_threshold: 0.4316
+  confidence_threshold: 0.5729
 
 ensemble:
-  enable: true
+  enable: false
   models:
     - "xgboost"
     - "lightgbm"
@@ -47,6 +47,58 @@ ensemble:
   performance_window: 168 # use last 7 days for weight calculation
   multi_horizon: true
   horizons: [1, 4, 12] # reduced to 3 horizons for faster training
+
+model_params:
+  xgboost:
+    n_estimators: 100
+    max_depth: 8
+    learning_rate: 0.0156
+    subsample: 0.8418
+    colsample_bytree: 0.8
+
+  lightgbm:
+    n_estimators: 50
+    max_depth: 4
+    learning_rate: 0.05
+    num_leaves: 15
+    subsample: 0.8
+    colsample_bytree: 0.8
+    min_child_samples: 20
+    min_split_gain: 0.1
+
+  random_forest:
+    n_estimators: 300
+    max_depth: 15
+    min_samples_split: 3
+    min_samples_leaf: 1
+    max_features: "sqrt"
+
+  extra_trees:
+    n_estimators: 200
+    max_depth: 15
+    min_samples_split: 3
+    min_samples_leaf: 1
+    max_features: "sqrt"
+
+  ridge:
+    alpha: 1.0
+
+exit_rules:
+  enable: false # disable exit rules - they're destroying performance
+  max_concurrent_positions: 5
+  time_based:
+    profit_take_hours: 48 # exit after 48h if profit >= 2%
+    profit_take_threshold: 2.0 # minimum profit % for time-based exit
+    max_hold_hours: 168 # maximum position age (1 week)
+    initial_stop_loss: -8.0 # initial stop loss % (wider for energy volatility)
+    stop_loss_decay: -0.02 # gradual tightening per hour
+  trailing_stop:
+    enable: false # disable trailing stops initially
+    initial_stop: 8.0 # % profit before trailing starts
+    trail_amount: 3.0 # trailing distance %
+  position_management:
+    enable_consensus_exits: false # disable consensus exits initially
+    confidence_exit_threshold: 0.1 # only exit if confidence very low
 
 trading:
   position_size_mwh: 1
