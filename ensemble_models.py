@@ -20,24 +20,24 @@ class EnsembleAnalyst:
     
     def _init_models(self):
         self.models['xgboost'] = xgb.XGBRegressor(
-            n_estimators=self.config.model.n_estimators,
-            max_depth=self.config.model.max_depth,
-            learning_rate=self.config.model.learning_rate,
-            subsample=self.config.model.subsample,
-            colsample_bytree=self.config.model.colsample_bytree,
+            n_estimators=self.config.model_params.xgboost.n_estimators,
+            max_depth=self.config.model_params.xgboost.max_depth,
+            learning_rate=self.config.model_params.xgboost.learning_rate,
+            subsample=self.config.model_params.xgboost.subsample,
+            colsample_bytree=self.config.model_params.xgboost.colsample_bytree,
             random_state=42,
             objective='reg:squarederror'
         )
         
         self.models['lightgbm'] = lgb.LGBMRegressor(
-            n_estimators=50,
-            max_depth=4,
-            learning_rate=0.05,
-            num_leaves=15,
-            subsample=0.8,
-            colsample_bytree=0.8,
-            min_child_samples=20,
-            min_split_gain=0.1,
+            n_estimators=self.config.model_params.lightgbm.n_estimators,
+            max_depth=self.config.model_params.lightgbm.max_depth,
+            learning_rate=self.config.model_params.lightgbm.learning_rate,
+            num_leaves=self.config.model_params.lightgbm.num_leaves,
+            subsample=self.config.model_params.lightgbm.subsample,
+            colsample_bytree=self.config.model_params.lightgbm.colsample_bytree,
+            min_child_samples=self.config.model_params.lightgbm.min_child_samples,
+            min_split_gain=self.config.model_params.lightgbm.min_split_gain,
             random_state=43,
             objective='regression',
             boosting_type='gbdt',
@@ -45,26 +45,26 @@ class EnsembleAnalyst:
         )
         
         self.models['random_forest'] = RandomForestRegressor(
-            n_estimators=300,
-            max_depth=15,
-            min_samples_split=3,
-            min_samples_leaf=1,
-            max_features='sqrt',
+            n_estimators=self.config.model_params.random_forest.n_estimators,
+            max_depth=self.config.model_params.random_forest.max_depth,
+            min_samples_split=self.config.model_params.random_forest.min_samples_split,
+            min_samples_leaf=self.config.model_params.random_forest.min_samples_leaf,
+            max_features=self.config.model_params.random_forest.max_features,
             random_state=44,
             n_jobs=-1
         )
         
         self.models['ridge'] = Ridge(
-            alpha=1.0,
+            alpha=self.config.model_params.ridge.alpha,
             random_state=45
         )
         
         self.models['extra_trees'] = ExtraTreesRegressor(
-            n_estimators=200,
-            max_depth=15,
-            min_samples_split=3,
-            min_samples_leaf=1,
-            max_features='sqrt',
+            n_estimators=self.config.model_params.extra_trees.n_estimators,
+            max_depth=self.config.model_params.extra_trees.max_depth,
+            min_samples_split=self.config.model_params.extra_trees.min_samples_split,
+            min_samples_leaf=self.config.model_params.extra_trees.min_samples_leaf,
+            max_features=self.config.model_params.extra_trees.max_features,
             random_state=47,
             n_jobs=-1
         )
