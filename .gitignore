@@ -27,3 +27,6 @@ IMPLEMENTATION_PLAN.md
 mlruns/
 temp_plots/
 mlflow.db
+
+optuna_study.db
+max_hr_config.yaml
