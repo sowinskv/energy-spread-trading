@@ -21,22 +21,22 @@ cv:
   n_splits: 4
 
 model:
-  n_estimators: 100
-  max_depth: 9
-  learning_rate: 0.0323
-  subsample: 0.8230
-  colsample_bytree: 0.8
+  n_estimators: 200
+  max_depth: 10
+  learning_rate: 0.0137
+  subsample: 0.8195
+  colsample_bytree: 0.7700
   random_state: 42
 
 meta_model:
-  n_estimators: 200
-  max_depth: 4
-  learning_rate: 0.0140
+  n_estimators: 50
+  max_depth: 5
+  learning_rate: 0.0241
   random_state: 42
-  confidence_threshold: 0.5729
+  confidence_threshold: 0.6331
 
 ensemble:
-  enable: false
+  enable: true
   models:
     - "xgboost"
     - "lightgbm"
@@ -44,22 +44,22 @@ ensemble:
     - "extra_trees"
     - "ridge"
   reweight_frequency: 720 # reweight every 30 days
-  performance_window: 168 # use last 7 days for weight calculation
+  performance_window: 48 # use last 2 days for weight calculation
   multi_horizon: true
-  horizons: [1, 4, 12] # reduced to 3 horizons for faster training
+  horizons: [1, 4, 12, 24] # long horizon configuration
 
 model_params:
   xgboost:
-    n_estimators: 100
-    max_depth: 8
-    learning_rate: 0.0156
-    subsample: 0.8418
-    colsample_bytree: 0.8
+    n_estimators: 200
+    max_depth: 10
+    learning_rate: 0.0137
+    subsample: 0.8195
+    colsample_bytree: 0.7700
 
   lightgbm:
-    n_estimators: 50
+    n_estimators: 90
     max_depth: 4
-    learning_rate: 0.05
+    learning_rate: 0.0206
     num_leaves: 15
     subsample: 0.8
     colsample_bytree: 0.8
