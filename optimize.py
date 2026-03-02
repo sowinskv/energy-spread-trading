@@ -5,7 +5,10 @@ from omegaconf import OmegaConf
 import xgboost as xgb
 from sklearn.pipeline import Pipeline
 from features import TimeSeriesImputer, EnergyFeatureEngineer
+from ensemble_models import EnsembleAnalyst, MultiHorizonEnsemble
+from train_pipeline import calculate_enhanced_meta_trading_metrics_with_exits
 import warnings
+import sqlite3
 
 warnings.filterwarnings("ignore")
 
@@ -105,13 +108,47 @@ splits = get_purged_walk_forward_splits(
 )
 
 def objective(trial):
-    analyst_params = {
-        'n_estimators': trial.suggest_int('analyst_n_estimators', 100, 300, step=50),
-        'max_depth': trial.suggest_int('analyst_max_depth', 4, 9),
-        'learning_rate': trial.suggest_float('analyst_lr', 0.01, 0.1, log=True),
-        'subsample': trial.suggest_float('analyst_subsample', 0.6, 1.0),
-        'random_state': 42
-    }
+    use_ensemble = trial.suggest_categorical('use_ensemble', [True, False])
+    
+    if use_ensemble:
+        ensemble_params = {
+            'reweight_frequency': trial.suggest_categorical('reweight_frequency', [168, 336, 720, 1440]),
+            'performance_window': trial.suggest_categorical('performance_window', [48, 168, 336, 720]),
+            'multi_horizon': trial.suggest_categorical('multi_horizon', [True, False])
+        }
+        
+        if ensemble_params['multi_horizon']:
+            horizon_choice = trial.suggest_categorical('horizons', ['short', 'medium', 'long', 'extended'])
+            horizon_map = {
+                'short': [1, 4],
+                'medium': [1, 4, 12], 
+                'long': [1, 4, 12, 24],
+                'extended': [1, 2, 6, 12, 24]
+            }
+            ensemble_params['horizons'] = horizon_map[horizon_choice]
+        
+        analyst_params = {
+            'n_estimators': trial.suggest_int('xgb_n_estimators', 50, 200, step=25),
+            'max_depth': trial.suggest_int('xgb_max_depth', 4, 10),
+            'learning_rate': trial.suggest_float('xgb_lr', 0.005, 0.05, log=True),
+            'subsample': trial.suggest_float('xgb_subsample', 0.7, 1.0),
+            'colsample_bytree': trial.suggest_float('xgb_colsample', 0.7, 1.0)
+        }
+        
+        lgb_params = {
+            'n_estimators': trial.suggest_int('lgb_n_estimators', 30, 150, step=20),
+            'max_depth': trial.suggest_int('lgb_max_depth', 3, 8),
+            'learning_rate': trial.suggest_float('lgb_lr', 0.005, 0.1, log=True),
+            'num_leaves': trial.suggest_categorical('lgb_num_leaves', [15, 31, 63, 127])
+        }
+    else:
+        analyst_params = {
+            'n_estimators': trial.suggest_int('analyst_n_estimators', 100, 300, step=50),
+            'max_depth': trial.suggest_int('analyst_max_depth', 4, 9),
+            'learning_rate': trial.suggest_float('analyst_lr', 0.01, 0.1, log=True),
+            'subsample': trial.suggest_float('analyst_subsample', 0.6, 1.0),
+            'random_state': 42
+        }
     
     manager_params = {
         'n_estimators': trial.suggest_int('manager_n_estimators', 50, 200, step=50),
@@ -122,7 +159,7 @@ def objective(trial):
     
     confidence_threshold = trial.suggest_float('confidence_threshold', 0.35, 0.75)
     
-    fold_sharpes = []
+    fold_hit_rates = []
 
     for train_idx, test_idx in splits:
         train_df = df.iloc[train_idx]
@@ -146,10 +183,64 @@ def objective(trial):
         X_test_prep = preprocessor.transform(test_df.drop(columns=config.data.leakage_cols))
         y_test = test_df[config.data.target_col]
 
-        analyst = xgb.XGBRegressor(**analyst_params, objective=asymmetric_trading_loss)
-        analyst.fit(X_prim_prep, y_prim)
+        if use_ensemble:
+            temp_config = OmegaConf.create({
+                'ensemble': ensemble_params,
+                'model': analyst_params,  # Keep for backward compatibility
+                'model_params': {
+                    'xgboost': {
+                        'n_estimators': analyst_params['n_estimators'],
+                        'max_depth': analyst_params['max_depth'], 
+                        'learning_rate': analyst_params['learning_rate'],
+                        'subsample': analyst_params['subsample'],
+                        'colsample_bytree': analyst_params['colsample_bytree']
+                    },
+                    'lightgbm': {
+                        'n_estimators': lgb_params['n_estimators'],
+                        'max_depth': lgb_params['max_depth'],
+                        'learning_rate': lgb_params['learning_rate'],
+                        'num_leaves': lgb_params['num_leaves'],
+                        'subsample': 0.8,  # Default value
+                        'colsample_bytree': 0.8,  # Default value
+                        'min_child_samples': 20,  # Default value
+                        'min_split_gain': 0.1  # Default value
+                    },
+                    'random_forest': {
+                        'n_estimators': 200, 
+                        'max_depth': 15, 
+                        'min_samples_split': 3, 
+                        'min_samples_leaf': 1,
+                        'max_features': 'sqrt'
+                    },
+                    'extra_trees': {
+                        'n_estimators': 150, 
+                        'max_depth': 15, 
+                        'min_samples_split': 3, 
+                        'min_samples_leaf': 1,
+                        'max_features': 'sqrt'
+                    },
+                    'ridge': {
+                        'alpha': 1.0
+                    }
+                }
+            })
+            
+            if ensemble_params['multi_horizon']:
+                analyst = MultiHorizonEnsemble(temp_config)
+                analyst.fit(X_prim_prep, y_prim, primary_df.index)  # timestamps needed
+            else:
+                analyst = EnsembleAnalyst(temp_config)
+                analyst.fit(X_prim_prep, y_prim)
+            
+            if ensemble_params['multi_horizon']:
+                meta_analyst_preds = analyst.predict(X_meta_prep, meta_df.index)
+            else:
+                meta_analyst_preds = analyst.predict(X_meta_prep)
+        else:
+            analyst = xgb.XGBRegressor(**analyst_params, objective=asymmetric_trading_loss)
+            analyst.fit(X_prim_prep, y_prim)
+            meta_analyst_preds = analyst.predict(X_meta_prep)
         
-        meta_analyst_preds = analyst.predict(X_meta_prep)
         meta_raw_pnl = np.sign(meta_analyst_preds) * y_meta - 0.5
         meta_labels = (meta_raw_pnl > 0).astype(int)
         
@@ -158,25 +249,58 @@ def objective(trial):
         manager = xgb.XGBClassifier(**manager_params)
         manager.fit(X_meta_enhanced, meta_labels)
         
-        test_analyst_preds = analyst.predict(X_test_prep)
+        if use_ensemble and ensemble_params.get('multi_horizon'):
+            test_analyst_preds = analyst.predict(X_test_prep, test_df.index)
+        else:
+            test_analyst_preds = analyst.predict(X_test_prep)
         X_test_enhanced = X_test_prep.copy()
         X_test_enhanced['analyst_pred'] = test_analyst_preds
         test_manager_probs = manager.predict_proba(X_test_enhanced)[:, 1]
         
-        sharpe = calculate_meta_trading_metrics(y_test, test_analyst_preds, test_manager_probs, confidence_threshold)
-        fold_sharpes.append(sharpe)
+        try:
+            temp_config_full = OmegaConf.create(OmegaConf.to_yaml(config))
+            temp_config_full.meta_model.confidence_threshold = confidence_threshold
+            
+            metrics = calculate_enhanced_meta_trading_metrics_with_exits(
+                y_test, test_analyst_preds, test_manager_probs, temp_config_full, use_exit_rules=False
+            )
+            hit_rate = metrics['hit_rate'] if not np.isnan(metrics['hit_rate']) else 0
+        except:
+            y_true_np = np.array(y_test)
+            y_pred_np = np.array(test_analyst_preds)
+            meta_probs_np = np.array(test_manager_probs)
+            
+            intended_position = np.sign(y_pred_np)
+            trade_mask = (meta_probs_np > confidence_threshold).astype(int)
+            actual_position = intended_position * trade_mask
+            
+            raw_pnl = actual_position * y_true_np
+            fees = trade_mask * 0.5  # cost_per_mwh
+            net_pnl = raw_pnl - fees
+            
+            executed_trades = net_pnl[trade_mask == 1]
+            if len(executed_trades) > 0:
+                hit_rate = (executed_trades > 0).mean() * 100
+            else:
+                hit_rate = 0
         
-    return np.mean(fold_sharpes)
+        fold_hit_rates.append(hit_rate)
+        
+    return np.mean(fold_hit_rates)
 
 if __name__ == "__main__":
-    print("running optuna optimization...")
+    print("running optuna optimization for maximum hit rate...")
     
-    study = optuna.create_study(direction='maximize')
+    study = optuna.create_study(
+    study_name="energy_hit_rate_optimization",
+    storage="sqlite:///optuna_study.db",
+    load_if_exists=True,
+    direction='maximize')
     study.optimize(objective, n_trials=100)
     
     print("\n" + "="*50)
     print("optimization complete. best results:")
-    print(f"best cv sharpe ratio: {study.best_value:.2f}")
+    print(f"best cv hit rate: {study.best_value:.1f}%")
     print("\noptimal parameters:")
     for key, value in study.best_params.items():
         if isinstance(value, float):
