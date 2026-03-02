@@ -135,11 +135,20 @@ def objective(trial):
             'colsample_bytree': trial.suggest_float('xgb_colsample', 0.7, 1.0)
         }
         
-        lgb_params = {
-            'n_estimators': trial.suggest_int('lgb_n_estimators', 30, 150, step=20),
-            'max_depth': trial.suggest_int('lgb_max_depth', 3, 8),
-            'learning_rate': trial.suggest_float('lgb_lr', 0.005, 0.1, log=True),
-            'num_leaves': trial.suggest_categorical('lgb_num_leaves', [15, 31, 63, 127])
+        rf_params = {
+            'n_estimators': trial.suggest_int('rf_n_estimators', 100, 500, step=50),
+            'max_depth': trial.suggest_int('rf_max_depth', 10, 25),
+            'min_samples_split': trial.suggest_int('rf_min_samples_split', 2, 10),
+            'min_samples_leaf': trial.suggest_int('rf_min_samples_leaf', 1, 5),
+            'max_features': trial.suggest_categorical('rf_max_features', ['sqrt', 'log2', 0.7, 0.8, 0.9])
+        }
+        
+        et_params = {
+            'n_estimators': trial.suggest_int('et_n_estimators', 100, 500, step=50),
+            'max_depth': trial.suggest_int('et_max_depth', 10, 25),
+            'min_samples_split': trial.suggest_int('et_min_samples_split', 2, 10),
+            'min_samples_leaf': trial.suggest_int('et_min_samples_leaf', 1, 5),
+            'max_features': trial.suggest_categorical('et_max_features', ['sqrt', 'log2', 0.7, 0.8, 0.9])
         }
     else:
         analyst_params = {
@@ -186,7 +195,7 @@ def objective(trial):
         if use_ensemble:
             temp_config = OmegaConf.create({
                 'ensemble': ensemble_params,
-                'model': analyst_params,  # Keep for backward compatibility
+                'model': analyst_params,
                 'model_params': {
                     'xgboost': {
                         'n_estimators': analyst_params['n_estimators'],
@@ -195,29 +204,19 @@ def objective(trial):
                         'subsample': analyst_params['subsample'],
                         'colsample_bytree': analyst_params['colsample_bytree']
                     },
-                    'lightgbm': {
-                        'n_estimators': lgb_params['n_estimators'],
-                        'max_depth': lgb_params['max_depth'],
-                        'learning_rate': lgb_params['learning_rate'],
-                        'num_leaves': lgb_params['num_leaves'],
-                        'subsample': 0.8,  # Default value
-                        'colsample_bytree': 0.8,  # Default value
-                        'min_child_samples': 20,  # Default value
-                        'min_split_gain': 0.1  # Default value
-                    },
                     'random_forest': {
-                        'n_estimators': 200, 
-                        'max_depth': 15, 
-                        'min_samples_split': 3, 
-                        'min_samples_leaf': 1,
-                        'max_features': 'sqrt'
+                        'n_estimators': rf_params['n_estimators'],
+                        'max_depth': rf_params['max_depth'],
+                        'min_samples_split': rf_params['min_samples_split'],
+                        'min_samples_leaf': rf_params['min_samples_leaf'],
+                        'max_features': rf_params['max_features']
                     },
                     'extra_trees': {
-                        'n_estimators': 150, 
-                        'max_depth': 15, 
-                        'min_samples_split': 3, 
-                        'min_samples_leaf': 1,
-                        'max_features': 'sqrt'
+                        'n_estimators': et_params['n_estimators'],
+                        'max_depth': et_params['max_depth'],
+                        'min_samples_split': et_params['min_samples_split'],
+                        'min_samples_leaf': et_params['min_samples_leaf'],
+                        'max_features': et_params['max_features']
                     },
                     'ridge': {
                         'alpha': 1.0
@@ -227,7 +226,7 @@ def objective(trial):
             
             if ensemble_params['multi_horizon']:
                 analyst = MultiHorizonEnsemble(temp_config)
-                analyst.fit(X_prim_prep, y_prim, primary_df.index)  # timestamps needed
+                analyst.fit(X_prim_prep, y_prim, primary_df.index)
             else:
                 analyst = EnsembleAnalyst(temp_config)
                 analyst.fit(X_prim_prep, y_prim)
@@ -275,7 +274,7 @@ def objective(trial):
             actual_position = intended_position * trade_mask
             
             raw_pnl = actual_position * y_true_np
-            fees = trade_mask * 0.5  # cost_per_mwh
+            fees = trade_mask * 0.5
             net_pnl = raw_pnl - fees
             
             executed_trades = net_pnl[trade_mask == 1]
@@ -290,6 +289,7 @@ def objective(trial):
 
 if __name__ == "__main__":
     print("running optuna optimization for maximum hit rate...")
+    print("targeting high-performing models: XGBoost, Random Forest, Extra Trees (89% of ensemble)")
     
     study = optuna.create_study(
     study_name="energy_hit_rate_optimization",

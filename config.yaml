@@ -33,20 +33,19 @@ meta_model:
   max_depth: 5
   learning_rate: 0.0241
   random_state: 42
-  confidence_threshold: 0.6331
+  confidence_threshold: 0.5800
 
 ensemble:
   enable: true
   models:
     - "xgboost"
-    - "lightgbm"
     - "random_forest"
     - "extra_trees"
     - "ridge"
-  reweight_frequency: 720 # reweight every 30 days
-  performance_window: 48 # use last 2 days for weight calculation
+  reweight_frequency: 168
+  performance_window: 24
   multi_horizon: true
-  horizons: [1, 4, 12, 24] # long horizon configuration
+  horizons: [1, 4, 12, 24]
 
 model_params:
   xgboost:
@@ -56,54 +55,44 @@ model_params:
     subsample: 0.8195
     colsample_bytree: 0.7700
 
-  lightgbm:
-    n_estimators: 90
-    max_depth: 4
-    learning_rate: 0.0206
-    num_leaves: 15
-    subsample: 0.8
-    colsample_bytree: 0.8
-    min_child_samples: 20
-    min_split_gain: 0.1
-
   random_forest:
-    n_estimators: 300
-    max_depth: 15
-    min_samples_split: 3
+    n_estimators: 500
+    max_depth: 20
+    min_samples_split: 2
     min_samples_leaf: 1
-    max_features: "sqrt"
+    max_features: "log2"
 
   extra_trees:
-    n_estimators: 200
-    max_depth: 15
-    min_samples_split: 3
+    n_estimators: 400
+    max_depth: 20
+    min_samples_split: 2
     min_samples_leaf: 1
-    max_features: "sqrt"
+    max_features: 0.8
 
   ridge:
     alpha: 1.0
 
 exit_rules:
-  enable: false # disable exit rules - they're destroying performance
+  enable: false
   max_concurrent_positions: 5
-  time_based:
-    profit_take_hours: 48 # exit after 48h if profit >= 2%
-    profit_take_threshold: 2.0 # minimum profit % for time-based exit
-    max_hold_hours: 168 # maximum position age (1 week)
-    initial_stop_loss: -8.0 # initial stop loss % (wider for energy volatility)
-    stop_loss_decay: -0.02 # gradual tightening per hour
   trailing_stop:
-    enable: false # disable trailing stops initially
-    initial_stop: 8.0 # % profit before trailing starts
-    trail_amount: 3.0 # trailing distance %
+    enable: false
+    initial_stop: 8.0
+    trail_amount: 3.0
+  time_based:
+    profit_take_hours: 48
+    profit_take_threshold: 2.0
+    max_hold_hours: 168
+    initial_stop_loss: -8.0
+    stop_loss_decay: -0.02
   position_management:
-    enable_consensus_exits: false # disable consensus exits initially
-    confidence_exit_threshold: 0.1 # only exit if confidence very low
+    enable_consensus_exits: false
+    confidence_exit_threshold: 0.1
 
 trading:
   position_size_mwh: 1
   cost_per_mwh: 0.5
-  currency: "EUR" # assumed currency
+  currency: "EUR"
 
 mlflow:
   experiment_name: "energy_price_prediction"
