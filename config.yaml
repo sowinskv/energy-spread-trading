@@ -35,6 +35,19 @@ meta_model:
   random_state: 42
   confidence_threshold: 0.4316
 
+ensemble:
+  enable: true
+  models:
+    - "xgboost"
+    - "lightgbm"
+    - "random_forest"
+    - "extra_trees"
+    - "ridge"
+  reweight_frequency: 720 # reweight every 30 days
+  performance_window: 168 # use last 7 days for weight calculation
+  multi_horizon: true
+  horizons: [1, 4, 12] # reduced to 3 horizons for faster training
+
 trading:
   position_size_mwh: 1
   cost_per_mwh: 0.5

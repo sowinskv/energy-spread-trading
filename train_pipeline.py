@@ -5,6 +5,7 @@ import mlflow
 from omegaconf import OmegaConf
 from sklearn.pipeline import Pipeline
 from features import TimeSeriesImputer, EnergyFeatureEngineer
+from ensemble_models import EnsembleAnalyst, MultiHorizonEnsemble
 
 
 def confidence_based_position_sizing(meta_probs, base_position=1.0, min_confidence=0.5, max_multiplier=2.0):
@@ -35,10 +36,6 @@ def detect_market_volatility_regime(returns, window=72):
 
 
 def multi_horizon_consensus(predictions_1h, predictions_4h, consensus_threshold=0.75):
-    """
-    Only trade when multiple time horizons agree on direction.
-    This improves hit rate by filtering out noisy signals.
-    """
     direction_1h = np.sign(predictions_1h)
     direction_4h = np.sign(predictions_4h)
     
@@ -51,10 +48,6 @@ def multi_horizon_consensus(predictions_1h, predictions_4h, consensus_threshold=
 
 
 def optimal_trading_hours(timestamp_index):
-    """
-    Identify optimal trading hours based on market activity.
-    Avoid trading during low-liquidity periods.
-    """
     hours = timestamp_index.hour
     weekday = timestamp_index.dayofweek
     
@@ -90,9 +83,6 @@ def calculate_enhanced_meta_trading_metrics(y_true, y_pred, meta_probs, confiden
                                           cost_per_mwh=0.5, position_size_mwh=1.0,
                                           use_dynamic_thresholds=True, use_confidence_sizing=True,
                                           timestamps=None):
-    """
-    Enhanced trading with multiple profit/hit rate optimization techniques.
-    """
     y_true_np = np.array(y_true)
     y_pred_np = np.array(y_pred)
     meta_probs_np = np.array(meta_probs)
@@ -186,7 +176,7 @@ def calculate_enhanced_meta_trading_metrics(y_true, y_pred, meta_probs, confiden
     }
 
 def load_and_format_raw_data(filepath):
-    print("loading raw data and formatting...")
+    print("loading data...")
     df = pd.read_csv(filepath, low_memory=False)
     
     cols_to_exclude = ['date_cet', 'IS_ACTIVE_DOWN_SDAC_PL', 'IS_ACTIVE_UP_SDAC_PL']
@@ -216,10 +206,6 @@ def load_and_format_raw_data(filepath):
     return df
 
 def get_expanding_walk_forward_splits(df_length, initial_train_days, test_days, purge_days, n_splits):
-    """
-    Expanding window: each fold gets progressively more training data.
-    More realistic for production where you accumulate historical data daily.
-    """
     initial_train_steps = initial_train_days * 24
     test_steps = test_days * 24
     purge_steps = purge_days * 24
@@ -240,11 +226,6 @@ def get_expanding_walk_forward_splits(df_length, initial_train_days, test_days, 
     return splits
 
 def main():
-    """main training pipeline with meta-labeling approach.
-    
-    CURRENCY ASSUMPTION: all price data assumed to be in EUR/MWh as per
-    European Market Coupling standards (SDAC uses EUR for settlement).
-    """
     config = OmegaConf.load("config.yaml")
     mlflow.set_experiment(config.mlflow.experiment_name)
     
@@ -269,7 +250,7 @@ def main():
         fold_hit_rates, fold_sortinos = [], []
         fold_position_sizes, fold_total_trades, fold_consensus_trades = [], [], []
 
-        print("starting cross-validation pipeline...")
+        print("starting cv pipeline...")
 
         for fold, (train_idx, test_idx) in enumerate(splits, 1):
             print(f"\n--- fold {fold} ---")
@@ -293,30 +274,83 @@ def main():
             
             X_test_prep = preprocessor.transform(test_df.drop(columns=config.data.leakage_cols))
             y_test = test_df[config.data.target_col]
+            test_timestamps = test_df.index if hasattr(test_df, 'index') else None
 
-            analyst = xgb.XGBRegressor(**config.model, objective=asymmetric_trading_loss)
-            analyst.fit(X_prim_prep, y_prim)
+            print("training ensemble...")
+            if config.ensemble.enable and config.ensemble.multi_horizon:
+                ensemble_analyst = MultiHorizonEnsemble(config, horizons=config.ensemble.horizons)
+                ensemble_analyst.fit(X_prim_prep, y_prim, primary_df.index)
+                
+                meta_analyst_preds = ensemble_analyst.predict(X_meta_prep, meta_df.index)
+                test_analyst_preds = ensemble_analyst.predict(X_test_prep, test_timestamps)
+                
+                print(f"✓ multi-horizon ensemble: {len(config.ensemble.horizons)} horizons")
+                
+                meta_individual_preds = {}
+                test_individual_preds = {}
+                
+            elif config.ensemble.enable:
+                ensemble_analyst = EnsembleAnalyst(config)
+                ensemble_analyst.fit(X_prim_prep, y_prim)
+                
+                meta_analyst_preds = ensemble_analyst.predict(X_meta_prep)
+                test_analyst_preds = ensemble_analyst.predict(X_test_prep)
+                
+                meta_individual_preds = ensemble_analyst.get_individual_predictions(X_meta_prep)
+                test_individual_preds = ensemble_analyst.get_individual_predictions(X_test_prep)
+                
+                print(f"✓ ensemble: {len(ensemble_analyst.models)} models")
+                print(f"  weights: {ensemble_analyst.weights}")
+                
+            else:
+                print("fallback: single xgboost")
+                analyst = xgb.XGBRegressor(**config.model, objective=asymmetric_trading_loss)
+                analyst.fit(X_prim_prep, y_prim)
+                
+                meta_analyst_preds = analyst.predict(X_meta_prep)
+                test_analyst_preds = analyst.predict(X_test_prep)
+                
+                meta_individual_preds = {}
+                test_individual_preds = {}
             
-            meta_analyst_preds = analyst.predict(X_meta_prep)
             meta_raw_pnl = np.sign(meta_analyst_preds) * y_meta - 0.5
             meta_labels = (meta_raw_pnl > 0).astype(int)
-            X_meta_enhanced = X_meta_prep.copy()
-            X_meta_enhanced['analyst_pred'] = meta_analyst_preds
             
+            X_meta_enhanced = X_meta_prep.copy()
+            X_meta_enhanced['analyst_pred_ensemble'] = meta_analyst_preds
+            
+            if config.ensemble.enable and not config.ensemble.multi_horizon:
+                for model_name, preds in meta_individual_preds.items():
+                    X_meta_enhanced[f'analyst_pred_{model_name}'] = preds
+                
+                pred_values = list(meta_individual_preds.values())
+                X_meta_enhanced['prediction_variance'] = np.var(pred_values, axis=0)
+                X_meta_enhanced['prediction_range'] = np.max(pred_values, axis=0) - np.min(pred_values, axis=0)
+                X_meta_enhanced['model_consensus'] = np.mean([
+                    np.sign(pred) for pred in pred_values
+                ], axis=0)
+
             meta_params = dict(config.meta_model)
             meta_params.pop('confidence_threshold', None)
 
             manager = xgb.XGBClassifier(**meta_params)
             manager.fit(X_meta_enhanced, meta_labels)
             
-            test_analyst_preds = analyst.predict(X_test_prep)
-            
             X_test_enhanced = X_test_prep.copy()
-            X_test_enhanced['analyst_pred'] = test_analyst_preds
+            X_test_enhanced['analyst_pred_ensemble'] = test_analyst_preds
+            
+            if config.ensemble.enable and not config.ensemble.multi_horizon:
+                for model_name, preds in test_individual_preds.items():
+                    X_test_enhanced[f'analyst_pred_{model_name}'] = preds
+                
+                pred_values = list(test_individual_preds.values())
+                X_test_enhanced['prediction_variance'] = np.var(pred_values, axis=0)
+                X_test_enhanced['prediction_range'] = np.max(pred_values, axis=0) - np.min(pred_values, axis=0)
+                X_test_enhanced['model_consensus'] = np.mean([
+                    np.sign(pred) for pred in pred_values
+                ], axis=0)
             
             test_manager_probs = manager.predict_proba(X_test_enhanced)[:, 1]
-            
-            test_timestamps = test_df.index if hasattr(test_df, 'index') else None
             
             metrics = calculate_enhanced_meta_trading_metrics(
                 y_test, 
@@ -363,7 +397,7 @@ def main():
         avg_consensus_rate = np.mean([c/max(1,t) for c,t in zip(fold_consensus_trades, fold_total_trades)])
         
         print("\n" + "="*50)
-        print("enhanced trading results with profit optimization:")
+        print("results:")
         print(f"pnl: {config.trading.currency}{avg_pnl:.2f} | sharpe: {avg_sharpe:.2f} | sortino: {avg_sortino:.2f}")
         print(f"drawdown: {config.trading.currency}{avg_dd:.2f} | hit rate: {avg_hit_rate:.1f}% | hours traded: {avg_traded:.1f}%")
         print(f"avg trades per fold: {avg_total_trades:.0f} | avg size: {avg_position_size:.2f} | consensus rate: {avg_consensus_rate:.1%}")
@@ -379,7 +413,7 @@ def main():
         mlflow.log_metric("avg_TotalTrades", avg_total_trades)
         mlflow.log_metric("avg_ConsensusRate", avg_consensus_rate)
 
-        print("\ntraining complete. check mlflow for detailed results.")
+        print("\ntraining complete.")
 
 if __name__ == "__main__":
     main()
