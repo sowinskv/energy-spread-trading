@@ -65,7 +65,7 @@ def validate_config(config: DictConfig) -> None:
                 raise KeyError(f"missing required config key: '{path}'")
 
 
-def load_and_format_raw_data(filepath: str) -> pd.DataFrame:
+def load_and_format_raw_data(filepath: str, *, winsor_pct: float = 0.01) -> pd.DataFrame:
     """Load energy data CSV and format for pipeline consumption."""
     from src.ui.display import data_loaded
 
@@ -106,19 +106,22 @@ def load_and_format_raw_data(filepath: str) -> pd.DataFrame:
     df["target_rolling_mean_168h"] = df["spread_SDAC_IDA1_PL"].shift(24).rolling(window=168).mean()
     df["target_rolling_std_48h"] = df["spread_SDAC_IDA1_PL"].shift(24).rolling(window=48).std()
 
-    # winsorize target at 1st/99th percentile to reduce outlier influence
+    # winsorize target to reduce outlier influence
     spread = df["spread_SDAC_IDA1_PL"]
-    q01, q99 = spread.quantile(0.01), spread.quantile(0.99)
-    df["spread_SDAC_IDA1_PL"] = spread.clip(lower=q01, upper=q99)
+    q_lo, q_hi = spread.quantile(winsor_pct), spread.quantile(1 - winsor_pct)
+    df["spread_SDAC_IDA1_PL"] = spread.clip(lower=q_lo, upper=q_hi)
 
     validate_dataframe(df, stage="after_formatting")
     data_loaded(filepath, len(df), len(df.columns))
     return df
 
 
-def prepare_dataset(config: DictConfig) -> tuple[pd.DataFrame, list[str], list[str]]:
+def prepare_dataset(
+    config: DictConfig, *, winsor_pct: float | None = None
+) -> tuple[pd.DataFrame, list[str], list[str]]:
     validate_config(config)
-    df = load_and_format_raw_data(config.data.file_path)
+    pct = winsor_pct if winsor_pct is not None else config.data.get("winsor_pct", 0.01)
+    df = load_and_format_raw_data(config.data.file_path, winsor_pct=pct)
     bool_cols = list(config.data.bool_cols)
     X_full = df.drop(columns=config.data.leakage_cols)
     numeric_cols = [c for c in X_full.columns if c not in bool_cols]

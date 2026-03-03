@@ -33,8 +33,14 @@ class TimeSeriesImputer(BaseEstimator, TransformerMixin):
         return X
 
 
+DEFAULT_PEAK_HOURS = (6, 7, 8, 9, 16, 17, 18, 19, 20)
+
+
 class EnergyFeatureEngineer(BaseEstimator, TransformerMixin):
     """handles temporal, spatial, regime, and fundamental features."""
+
+    def __init__(self, peak_hours: tuple[int, ...] | None = None) -> None:
+        self.peak_hours = peak_hours or DEFAULT_PEAK_HOURS
 
     def fit(self, X: pd.DataFrame, y: pd.Series | None = None) -> EnergyFeatureEngineer:
         self.is_fitted_ = True
@@ -55,7 +61,7 @@ class EnergyFeatureEngineer(BaseEstimator, TransformerMixin):
         X["dow_sin"] = np.sin(2 * np.pi * X["day_of_week"] / 7)
         X["dow_cos"] = np.cos(2 * np.pi * X["day_of_week"] / 7)
         X["is_weekend"] = X["day_of_week"].isin([5, 6]).astype(int)
-        X["is_peak"] = X.index.hour.isin([6, 7, 8, 9, 16, 17, 18, 19, 20]).astype(int)
+        X["is_peak"] = X.index.hour.isin(self.peak_hours).astype(int)
 
         # residual load is demand minus renewables
         X["residual_load"] = X["grid_demand_fcst"] - (X["fcst_pv_tot_gen"] + X["fcst_wi_tot_gen"])

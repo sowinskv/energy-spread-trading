@@ -26,10 +26,11 @@ class FoldTrainer:
         self.individual_preds_test: dict[str, NDArray[np.floating]] = {}
 
     def create_preprocessor(self) -> Pipeline:
+        peak_hours = tuple(self.config.get("features", {}).get("peak_hours", [6, 7, 8, 9, 16, 17, 18, 19, 20]))
         self.preprocessor = Pipeline(
             [
                 ("imputer", TimeSeriesImputer(bool_cols=self.bool_cols, numeric_cols=self.numeric_cols)),
-                ("feature_engineer", EnergyFeatureEngineer()),
+                ("feature_engineer", EnergyFeatureEngineer(peak_hours=peak_hours)),
             ]
         )
         return self.preprocessor
@@ -72,16 +73,18 @@ class FoldTrainer:
         y_prim: pd.Series,
         primary_index: pd.DatetimeIndex | None = None,
         analyst_config: DictConfig | None = None,
+        *,
+        verbose: bool = True,
     ) -> AnalystModel:
         cfg = analyst_config or self.config
 
         if cfg.ensemble.enable and cfg.ensemble.multi_horizon:
             horizons = cfg.ensemble.get("horizons", [1, 4, 12, 24])
             self.analyst = MultiHorizonEnsemble(cfg, horizons=horizons)
-            self.analyst.fit(X_prim, y_prim, primary_index)
+            self.analyst.fit(X_prim, y_prim, primary_index, verbose=verbose)
         elif cfg.ensemble.enable:
             self.analyst = EnsembleAnalyst(cfg)
-            self.analyst.fit(X_prim, y_prim)
+            self.analyst.fit(X_prim, y_prim, verbose=verbose)
         else:
             self.analyst = xgb.XGBRegressor(**cfg.model, objective=asymmetric_trading_loss)
             self.analyst.fit(X_prim, y_prim)

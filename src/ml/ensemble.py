@@ -243,14 +243,16 @@ class MultiHorizonEnsemble:
         self.horizon_ensembles = {}
         self.horizon_weights = None
 
-    def fit(self, X: pd.DataFrame, y: pd.Series, timestamps: pd.DatetimeIndex) -> MultiHorizonEnsemble:
+    def fit(
+        self, X: pd.DataFrame, y: pd.Series, timestamps: pd.DatetimeIndex, *, verbose: bool = True
+    ) -> MultiHorizonEnsemble:
         horizon_performance = {}
 
         for horizon in self.horizons:
             X_horizon = self._create_horizon_features(X, horizon)
 
             ensemble = EnsembleAnalyst(self.config)
-            ensemble.fit(X_horizon, y, verbose=False)  # Suppress individual prints
+            ensemble.fit(X_horizon, y, verbose=False)
 
             pred_horizon = ensemble.predict(X_horizon)
             mse = np.mean((y - pred_horizon) ** 2)
@@ -262,20 +264,21 @@ class MultiHorizonEnsemble:
 
         self.horizon_weights = self._calculate_horizon_weights(X, y, timestamps)
 
-        from src.ui.display import horizon_table
+        if verbose:
+            from src.ui.display import horizon_table
 
-        horizon_data = []
-        total_r2 = 0
-        total_mse = 0
+            horizon_data = []
+            total_r2 = 0
+            total_mse = 0
 
-        for horizon in sorted(horizon_performance.keys()):
-            perf = horizon_performance[horizon]
-            weight = self.horizon_weights.get(horizon, 1 / len(self.horizons))
-            horizon_data.append({"label": f"{horizon}h", "r2": perf["r2"], "mse": perf["mse"], "weight": weight})
-            total_r2 += weight * perf["r2"]
-            total_mse += weight * perf["mse"]
+            for horizon in sorted(horizon_performance.keys()):
+                perf = horizon_performance[horizon]
+                weight = self.horizon_weights.get(horizon, 1 / len(self.horizons))
+                horizon_data.append({"label": f"{horizon}h", "r2": perf["r2"], "mse": perf["mse"], "weight": weight})
+                total_r2 += weight * perf["r2"]
+                total_mse += weight * perf["mse"]
 
-        horizon_table(horizon_data, total_r2, total_mse, len(self.horizon_ensembles), len(X))
+            horizon_table(horizon_data, total_r2, total_mse, len(self.horizon_ensembles), len(X))
 
         return self
 

@@ -3,6 +3,7 @@ import warnings
 
 import numpy as np
 import optuna
+import pandas as pd
 import xgboost as xgb
 from omegaconf import OmegaConf
 
@@ -16,7 +17,8 @@ warnings.filterwarnings("ignore")
 
 def _load_data():
     config = OmegaConf.load("config.yaml")
-    df, bool_cols, numeric_cols = prepare_dataset(config)
+    # load with no winsorization — trials will apply their own clip
+    df, bool_cols, numeric_cols = prepare_dataset(config, winsor_pct=0.0)
     splits = get_purged_walk_forward_splits(
         df_length=len(df),
         train_days=config.cv.train_days,
@@ -27,11 +29,39 @@ def _load_data():
     return config, df, bool_cols, numeric_cols, splits
 
 
+def _winsorize_target(df: pd.DataFrame, target_col: str, pct: float) -> pd.DataFrame:
+    """Apply winsorization to target column in a copy of the DataFrame."""
+    if pct <= 0:
+        return df
+    df = df.copy()
+    spread = df[target_col]
+    q_lo, q_hi = spread.quantile(pct), spread.quantile(1 - pct)
+    df[target_col] = spread.clip(lower=q_lo, upper=q_hi)
+    return df
+
+
+PEAK_HOUR_PRESETS = {
+    "standard": (6, 7, 8, 9, 16, 17, 18, 19, 20),
+    "morning_heavy": (5, 6, 7, 8, 9, 10, 17, 18, 19),
+    "evening_heavy": (7, 8, 9, 15, 16, 17, 18, 19, 20, 21),
+    "narrow": (7, 8, 9, 17, 18, 19),
+    "wide": (5, 6, 7, 8, 9, 10, 15, 16, 17, 18, 19, 20, 21),
+}
+
+
 def objective(trial, config, df, bool_cols, numeric_cols, splits):
+    # --- feature engineering params ---
+    winsor_pct = trial.suggest_float("winsor_pct", 0.0, 0.05)
+    peak_preset = trial.suggest_categorical("peak_hours", list(PEAK_HOUR_PRESETS.keys()))
+    peak_hours = PEAK_HOUR_PRESETS[peak_preset]
+
+    # --- architecture ---
     use_ensemble = trial.suggest_categorical("use_ensemble", [True, False])
 
     if use_ensemble:
         ensemble_params = {
+            "enable": True,
+            "models": ["xgboost", "random_forest", "extra_trees", "ridge"],
             "reweight_frequency": trial.suggest_categorical("reweight_frequency", [168, 336, 720, 1440]),
             "performance_window": trial.suggest_categorical("performance_window", [48, 168, 336, 720]),
             "multi_horizon": trial.suggest_categorical("multi_horizon", [True, False]),
@@ -43,53 +73,63 @@ def objective(trial, config, df, bool_cols, numeric_cols, splits):
             ensemble_params["horizons"] = horizon_map[horizon_choice]
 
         analyst_params = {
-            "n_estimators": trial.suggest_int("xgb_n_estimators", 50, 200, step=25),
-            "max_depth": trial.suggest_int("xgb_max_depth", 4, 10),
-            "learning_rate": trial.suggest_float("xgb_lr", 0.005, 0.05, log=True),
-            "subsample": trial.suggest_float("xgb_subsample", 0.7, 1.0),
-            "colsample_bytree": trial.suggest_float("xgb_colsample", 0.7, 1.0),
+            "n_estimators": trial.suggest_int("xgb_n_estimators", 50, 300, step=25),
+            "max_depth": trial.suggest_int("xgb_max_depth", 4, 12),
+            "learning_rate": trial.suggest_float("xgb_lr", 0.003, 0.08, log=True),
+            "subsample": trial.suggest_float("xgb_subsample", 0.6, 1.0),
+            "colsample_bytree": trial.suggest_float("xgb_colsample", 0.5, 1.0),
         }
 
         rf_params = {
-            "n_estimators": trial.suggest_int("rf_n_estimators", 100, 500, step=50),
-            "max_depth": trial.suggest_int("rf_max_depth", 10, 25),
-            "min_samples_split": trial.suggest_int("rf_min_samples_split", 2, 10),
-            "min_samples_leaf": trial.suggest_int("rf_min_samples_leaf", 1, 5),
-            "max_features": trial.suggest_categorical("rf_max_features", ["sqrt", "log2", 0.7, 0.8, 0.9]),
+            "n_estimators": trial.suggest_int("rf_n_estimators", 100, 600, step=50),
+            "max_depth": trial.suggest_int("rf_max_depth", 8, 30),
+            "min_samples_split": trial.suggest_int("rf_min_samples_split", 2, 15),
+            "min_samples_leaf": trial.suggest_int("rf_min_samples_leaf", 1, 8),
+            "max_features": trial.suggest_categorical("rf_max_features", ["sqrt", "log2", 0.5, 0.7, 0.8, 0.9]),
         }
 
         et_params = {
-            "n_estimators": trial.suggest_int("et_n_estimators", 100, 500, step=50),
-            "max_depth": trial.suggest_int("et_max_depth", 10, 25),
-            "min_samples_split": trial.suggest_int("et_min_samples_split", 2, 10),
-            "min_samples_leaf": trial.suggest_int("et_min_samples_leaf", 1, 5),
-            "max_features": trial.suggest_categorical("et_max_features", ["sqrt", "log2", 0.7, 0.8, 0.9]),
+            "n_estimators": trial.suggest_int("et_n_estimators", 100, 600, step=50),
+            "max_depth": trial.suggest_int("et_max_depth", 8, 30),
+            "min_samples_split": trial.suggest_int("et_min_samples_split", 2, 15),
+            "min_samples_leaf": trial.suggest_int("et_min_samples_leaf", 1, 8),
+            "max_features": trial.suggest_categorical("et_max_features", ["sqrt", "log2", 0.5, 0.7, 0.8, 0.9]),
         }
+
+        ridge_alpha = trial.suggest_float("ridge_alpha", 0.01, 100.0, log=True)
     else:
         analyst_params = {
-            "n_estimators": trial.suggest_int("analyst_n_estimators", 100, 300, step=50),
-            "max_depth": trial.suggest_int("analyst_max_depth", 4, 9),
-            "learning_rate": trial.suggest_float("analyst_lr", 0.01, 0.1, log=True),
-            "subsample": trial.suggest_float("analyst_subsample", 0.6, 1.0),
+            "n_estimators": trial.suggest_int("analyst_n_estimators", 100, 400, step=50),
+            "max_depth": trial.suggest_int("analyst_max_depth", 4, 12),
+            "learning_rate": trial.suggest_float("analyst_lr", 0.005, 0.1, log=True),
+            "subsample": trial.suggest_float("analyst_subsample", 0.5, 1.0),
+            "colsample_bytree": trial.suggest_float("analyst_colsample", 0.5, 1.0),
             "random_state": 42,
         }
 
+    # --- meta-model ---
     manager_params = {
-        "n_estimators": trial.suggest_int("manager_n_estimators", 50, 200, step=50),
-        "max_depth": trial.suggest_int("manager_max_depth", 2, 5),
-        "learning_rate": trial.suggest_float("manager_lr", 0.01, 0.1, log=True),
+        "n_estimators": trial.suggest_int("manager_n_estimators", 50, 300, step=50),
+        "max_depth": trial.suggest_int("manager_max_depth", 2, 7),
+        "learning_rate": trial.suggest_float("manager_lr", 0.005, 0.15, log=True),
         "random_state": 42,
     }
 
-    confidence_threshold = trial.suggest_float("confidence_threshold", 0.35, 0.75)
+    confidence_threshold = trial.suggest_float("confidence_threshold", 0.30, 0.75)
 
+    # --- cross-validation ---
+    target_col = config.data.target_col
     fold_hit_rates = []
 
     for train_idx, test_idx in splits:
-        train_df = df.iloc[train_idx]
-        test_df = df.iloc[test_idx]
+        train_df = _winsorize_target(df.iloc[train_idx], target_col, winsor_pct)
+        test_df = _winsorize_target(df.iloc[test_idx], target_col, winsor_pct)
 
-        trainer = FoldTrainer(config, bool_cols, numeric_cols)
+        # inject peak_hours into a temp config for the feature engineer
+        temp_base = OmegaConf.create(OmegaConf.to_yaml(config))
+        OmegaConf.update(temp_base, "features.peak_hours", list(peak_hours))
+
+        trainer = FoldTrainer(temp_base, bool_cols, numeric_cols)
         data = trainer.prepare_fold_data(train_df, test_df)
 
         if use_ensemble:
@@ -119,11 +159,13 @@ def objective(trial, config, df, bool_cols, numeric_cols, splits):
                             "min_samples_leaf": et_params["min_samples_leaf"],
                             "max_features": et_params["max_features"],
                         },
-                        "ridge": {"alpha": 1.0},
+                        "ridge": {"alpha": ridge_alpha},
                     },
                 }
             )
-            trainer.train_analyst(data["X_prim"], data["y_prim"], data["primary_df"].index, analyst_config=temp_config)
+            trainer.train_analyst(
+                data["X_prim"], data["y_prim"], data["primary_df"].index, analyst_config=temp_config, verbose=False
+            )
         else:
             analyst = xgb.XGBRegressor(**analyst_params, objective=asymmetric_trading_loss)
             analyst.fit(data["X_prim"], data["y_prim"])
@@ -178,36 +220,56 @@ if __name__ == "__main__":
         format="%(message)s",
     )
 
-    from src.ui.display import _heading, _kv, _rule, header, status
+    from rich.text import Text
+
+    from src.ui.display import INDENT, _heading, _kv, _rule, console, header, status
 
     header("ENERGY")
 
     config, df, bool_cols, numeric_cols, splits = _load_data()
 
-    _heading("00", "OPTIMIZE", "optuna / hit rate maximization")
+    _heading("01", "OPTIMIZE", "optuna / hit rate maximization")
     status("xgboost + random forest + extra trees + ridge")
-    status("100 trials / purged walk-forward cv")
+    status("200 trials / purged walk-forward cv")
+    status("search: model params + winsorization + peak hours + ridge alpha")
+    console.print()
+
+    n_trials = 200
+
+    def _trial_callback(study: optuna.Study, trial: optuna.trial.FrozenTrial) -> None:
+        n = trial.number + 1
+        current = trial.value or 0.0
+        best = study.best_value
+        is_best = current >= best
+
+        t = Text()
+        t.append(f"{INDENT}T {n:03d} / {n_trials}   ", style="dim")
+        t.append(f"{current:.1f}%", style="bold" if is_best else "")
+        t.append("   best ", style="dim")
+        t.append(f"{best:.1f}%", style="bold")
+        if is_best:
+            t.append("  ←", style="dim")
+        console.print(t)
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     study = optuna.create_study(
-        study_name="energy_hit_rate_optimization",
+        study_name="energy_v2_features",
         storage="sqlite:///optuna_study.db",
         load_if_exists=True,
         direction="maximize",
     )
     study.optimize(
         lambda trial: objective(trial, config, df, bool_cols, numeric_cols, splits),
-        n_trials=100,
+        n_trials=n_trials,
+        callbacks=[_trial_callback],
     )
 
     _rule('"RESULTS"')
-    from src.ui.display import console
-
     console.print()
     _kv("best cv hit rate", f"{study.best_value:.1f}%", bold_value=True)
     console.print()
 
-    _heading("01", "OPTIMAL PARAMETERS")
+    _heading("02", "OPTIMAL PARAMETERS")
     for key, value in study.best_params.items():
         if isinstance(value, float):
             _kv(key, f"{value:.4f}")
