@@ -6,7 +6,7 @@ import optuna
 import xgboost as xgb
 from omegaconf import OmegaConf
 
-from src.core.data.loader import get_purged_walk_forward_splits, prepare_dataset
+from src.data.loader import get_purged_walk_forward_splits, prepare_dataset
 from src.ml.trainer import FoldTrainer
 from src.trading.metrics import asymmetric_trading_loss, calculate_enhanced_meta_trading_metrics_with_exits
 

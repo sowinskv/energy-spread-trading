@@ -1,10 +1,10 @@
 .PHONY: train optimize test lint format check clean
 
 train:
-	uv run train_pipeline.py
+	uv run python -m src.pipelines.train
 
 optimize:
-	uv run optimize.py
+	uv run python -m src.pipelines.optimize
 
 test:
 	uv run pytest tests/ -v

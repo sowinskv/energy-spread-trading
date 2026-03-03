@@ -7,8 +7,8 @@ from numpy.typing import NDArray
 from omegaconf import DictConfig
 from sklearn.pipeline import Pipeline
 
-from ensemble_models import EnsembleAnalyst, MultiHorizonEnsemble
-from features import EnergyFeatureEngineer, TimeSeriesImputer
+from src.ml.ensemble import EnsembleAnalyst, MultiHorizonEnsemble
+from src.ml.features import EnergyFeatureEngineer, TimeSeriesImputer
 from src.trading.metrics import asymmetric_trading_loss
 
 AnalystModel = EnsembleAnalyst | MultiHorizonEnsemble | xgb.XGBRegressor

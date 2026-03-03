@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 from omegaconf import OmegaConf
 
-from src.core.data.loader import (
+from src.data.loader import (
     get_expanding_walk_forward_splits,
     get_purged_walk_forward_splits,
     validate_config,

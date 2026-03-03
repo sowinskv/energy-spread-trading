@@ -1,6 +1,6 @@
 # data and models
 data/
-!src/core/data/
+!src/data/
 *.csv
 *.model
 
