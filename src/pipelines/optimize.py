@@ -3,7 +3,6 @@ import warnings
 
 import numpy as np
 import optuna
-import pandas as pd
 import xgboost as xgb
 from omegaconf import OmegaConf
 
@@ -17,27 +16,16 @@ warnings.filterwarnings("ignore")
 
 def _load_data():
     config = OmegaConf.load("config.yaml")
-    # load with no winsorization — trials will apply their own clip
-    df, bool_cols, numeric_cols = prepare_dataset(config, winsor_pct=0.0)
+    df, bool_cols, numeric_cols = prepare_dataset(config)
     splits = get_purged_walk_forward_splits(
         df_length=len(df),
         train_days=config.cv.train_days,
         test_days=config.cv.test_days,
         purge_days=config.cv.purge_days,
         n_splits=config.cv.n_splits,
+        embargo_days=config.cv.get("embargo_days", 0),
     )
     return config, df, bool_cols, numeric_cols, splits
-
-
-def _winsorize_target(df: pd.DataFrame, target_col: str, pct: float) -> pd.DataFrame:
-    """Apply winsorization to target column in a copy of the DataFrame."""
-    if pct <= 0:
-        return df
-    df = df.copy()
-    spread = df[target_col]
-    q_lo, q_hi = spread.quantile(pct), spread.quantile(1 - pct)
-    df[target_col] = spread.clip(lower=q_lo, upper=q_hi)
-    return df
 
 
 PEAK_HOUR_PRESETS = {
@@ -51,7 +39,6 @@ PEAK_HOUR_PRESETS = {
 
 def objective(trial, config, df, bool_cols, numeric_cols, splits):
     # --- feature engineering params ---
-    winsor_pct = trial.suggest_float("winsor_pct", 0.0, 0.05)
     peak_preset = trial.suggest_categorical("peak_hours", list(PEAK_HOUR_PRESETS.keys()))
     peak_hours = PEAK_HOUR_PRESETS[peak_preset]
 
@@ -118,12 +105,11 @@ def objective(trial, config, df, bool_cols, numeric_cols, splits):
     confidence_threshold = trial.suggest_float("confidence_threshold", 0.30, 0.75)
 
     # --- cross-validation ---
-    target_col = config.data.target_col
     fold_hit_rates = []
 
     for train_idx, test_idx in splits:
-        train_df = _winsorize_target(df.iloc[train_idx], target_col, winsor_pct)
-        test_df = _winsorize_target(df.iloc[test_idx], target_col, winsor_pct)
+        train_df = df.iloc[train_idx]
+        test_df = df.iloc[test_idx]
 
         # inject peak_hours into a temp config for the feature engineer
         temp_base = OmegaConf.create(OmegaConf.to_yaml(config))

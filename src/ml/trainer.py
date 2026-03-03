@@ -150,7 +150,7 @@ class FoldTrainer:
         train_df: pd.DataFrame,
         test_df: pd.DataFrame,
         analyst_config: DictConfig | None = None,
-    ) -> dict[str, pd.Series | NDArray[np.floating] | pd.DatetimeIndex | pd.DataFrame]:
+    ) -> dict[str, pd.Series | NDArray[np.floating] | pd.DatetimeIndex | pd.DataFrame | dict]:
         data = self.prepare_fold_data(train_df, test_df)
 
         self.train_analyst(
@@ -160,8 +160,21 @@ class FoldTrainer:
             analyst_config=analyst_config,
         )
 
+        # --- train-set metrics (for overfitting detection) ---
+        train_preds = self.predict_analyst(data["X_prim"], data["primary_df"].index)
+        y_train = np.array(data["y_prim"])
+        train_residuals = y_train - train_preds
+        train_r2 = 1 - (np.sum(train_residuals**2) / np.sum((y_train - np.mean(y_train)) ** 2))
+        train_mse = float(np.mean(train_residuals**2))
+
         meta_preds = self.predict_analyst(data["X_meta"], data["meta_df"].index)
         test_preds = self.predict_analyst(data["X_test"], test_df.index)
+
+        # --- test-set metrics ---
+        y_test_np = np.array(data["y_test"])
+        test_residuals = y_test_np - test_preds
+        test_r2 = 1 - (np.sum(test_residuals**2) / np.sum((y_test_np - np.mean(y_test_np)) ** 2))
+        test_mse = float(np.mean(test_residuals**2))
 
         cfg = analyst_config or self.config
         use_individual = cfg.ensemble.enable and not cfg.ensemble.get("multi_horizon", False)
@@ -183,4 +196,10 @@ class FoldTrainer:
             "test_manager_probs": test_manager_probs,
             "test_timestamps": test_df.index,
             "X_test_enhanced": X_test_enhanced,
+            "fit_metrics": {
+                "train_r2": train_r2,
+                "train_mse": train_mse,
+                "test_r2": test_r2,
+                "test_mse": test_mse,
+            },
         }

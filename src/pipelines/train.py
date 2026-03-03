@@ -12,6 +12,32 @@ from src.ui.display import backtest_summary, fold_header, fold_results, header, 
 logger = logging.getLogger(__name__)
 
 
+def _bootstrap_sharpe(
+    pnls: np.ndarray, n_bootstrap: int = 1000, ci: float = 0.95
+) -> tuple[tuple[float, float], float]:
+    """Bootstrap Sharpe ratio confidence interval and p-value.
+
+    Returns:
+        (lower, upper) CI bounds and p-value (prob Sharpe <= 0).
+    """
+    rng = np.random.default_rng(42)
+    n = len(pnls)
+    if n < 10:
+        return (0.0, 0.0), 1.0
+
+    sharpes = np.empty(n_bootstrap)
+    for i in range(n_bootstrap):
+        sample = rng.choice(pnls, size=n, replace=True)
+        std = sample.std()
+        sharpes[i] = (sample.mean() / std) * np.sqrt(8760) if std > 0 else 0.0
+
+    alpha = (1 - ci) / 2
+    lower = float(np.percentile(sharpes, alpha * 100))
+    upper = float(np.percentile(sharpes, (1 - alpha) * 100))
+    p_value = float(np.mean(sharpes <= 0))
+    return (lower, upper), p_value
+
+
 def main():
     logging.basicConfig(
         level=logging.INFO,
@@ -31,11 +57,14 @@ def main():
             test_days=config.cv.test_days,
             purge_days=config.cv.purge_days,
             n_splits=config.cv.n_splits,
+            embargo_days=config.cv.get("embargo_days", 0),
         )
 
         fold_pnls, fold_sharpes, fold_dds, fold_traded = [], [], [], []
         fold_hit_rates, fold_sortinos = [], []
         fold_position_sizes, fold_total_trades, fold_consensus_trades = [], [], []
+        naive_pnls, naive_sharpes, naive_hit_rates = [], [], []
+        all_net_pnls: list[np.ndarray] = []
 
         for fold, (train_idx, test_idx) in enumerate(splits, 1):
             train_df = df.iloc[train_idx]
@@ -50,6 +79,7 @@ def main():
             test_analyst_preds = result["test_analyst_preds"]
             test_manager_probs = result["test_manager_probs"]
             test_timestamps = result["test_timestamps"]
+            fit_metrics = result["fit_metrics"]
 
             metrics_no_exits = calculate_enhanced_meta_trading_metrics_with_exits(
                 y_test,
@@ -101,7 +131,33 @@ def main():
                 f"fold_{fold}_ConsensusRate", metrics["consensus_trades"] / max(1, metrics["total_trades"])
             )
 
-            fold_results(metrics, metrics_no_exits, config.trading.currency)
+            fold_results(metrics, metrics_no_exits, config.trading.currency, fit_metrics=fit_metrics)
+
+            # --- naive benchmark: trade every analyst signal, no meta-label gating ---
+            naive_probs = np.ones_like(test_manager_probs)
+            naive_metrics = calculate_enhanced_meta_trading_metrics_with_exits(
+                y_test,
+                test_analyst_preds,
+                naive_probs,
+                config,
+                confidence_threshold=0.0,
+                cost_per_mwh=config.trading.cost_per_mwh,
+                position_size_mwh=config.trading.position_size_mwh,
+                use_dynamic_thresholds=False,
+                use_confidence_sizing=False,
+                timestamps=test_timestamps,
+                use_exit_rules=False,
+            )
+            naive_pnls.append(naive_metrics["total_pnl"])
+            naive_sharpes.append(naive_metrics["sharpe_ratio"])
+            naive_hit_rates.append(naive_metrics["hit_rate"])
+
+            # collect per-trade PnLs for bootstrap significance
+            intended = np.sign(test_analyst_preds)
+            actual_pos = intended * (test_manager_probs > config.meta_model.confidence_threshold).astype(float)
+            trade_pnls = actual_pos * np.array(y_test)
+            traded_mask = actual_pos != 0
+            all_net_pnls.append(trade_pnls[traded_mask])
 
         avg_pnl = np.mean(fold_pnls)
         avg_sharpe = np.mean(fold_sharpes)
@@ -112,6 +168,15 @@ def main():
         avg_position_size = np.mean(fold_position_sizes)
         avg_total_trades = np.mean(fold_total_trades)
         avg_consensus_rate = np.mean([c / max(1, t) for c, t in zip(fold_consensus_trades, fold_total_trades)])
+
+        # naive benchmark averages
+        naive_avg_pnl = np.mean(naive_pnls)
+        naive_avg_sharpe = np.mean(naive_sharpes)
+        naive_avg_hit_rate = np.mean(naive_hit_rates)
+
+        # bootstrap sharpe CI
+        combined_pnls = np.concatenate(all_net_pnls) if all_net_pnls else np.array([0.0])
+        bootstrap_ci, bootstrap_p = _bootstrap_sharpe(combined_pnls)
 
         backtest_summary(
             avg_pnl=avg_pnl,
@@ -125,6 +190,11 @@ def main():
             avg_position=avg_position_size,
             currency=config.trading.currency,
             n_folds=len(splits),
+            naive_pnl=naive_avg_pnl,
+            naive_sharpe=naive_avg_sharpe,
+            naive_hit_rate=naive_avg_hit_rate,
+            sharpe_ci=bootstrap_ci,
+            sharpe_p=bootstrap_p,
         )
 
         mlflow.log_metric("avg_PnL", avg_pnl)

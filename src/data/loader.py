@@ -129,16 +129,28 @@ def prepare_dataset(
 
 
 def get_expanding_walk_forward_splits(
-    df_length: int, initial_train_days: int, test_days: int, purge_days: int, n_splits: int
+    df_length: int,
+    initial_train_days: int,
+    test_days: int,
+    purge_days: int,
+    n_splits: int,
+    embargo_days: int = 0,
 ) -> list[tuple[NDArray[np.intp], NDArray[np.intp]]]:
-    """Generate expanding window walk-forward CV splits"""
+    """Generate expanding window walk-forward CV splits.
+
+    purge_days: gap BEFORE test (prevents train leaking into test)
+    embargo_days: gap AFTER test (prevents next fold's train from
+                  seeing data temporally close to this fold's test)
+    """
     initial_train_steps = initial_train_days * 24
     test_steps = test_days * 24
     purge_steps = purge_days * 24
+    embargo_steps = embargo_days * 24
+    stride = test_steps + embargo_steps
 
     splits = []
     for i in range(n_splits):
-        test_start = initial_train_steps + purge_steps + (i * (test_steps + purge_steps))
+        test_start = initial_train_steps + purge_steps + (i * stride)
         test_end = test_start + test_steps
 
         if test_end > df_length:
@@ -153,13 +165,24 @@ def get_expanding_walk_forward_splits(
 
 
 def get_purged_walk_forward_splits(
-    df_length: int, train_days: int, test_days: int, purge_days: int, n_splits: int
+    df_length: int,
+    train_days: int,
+    test_days: int,
+    purge_days: int,
+    n_splits: int,
+    embargo_days: int = 0,
 ) -> list[tuple[NDArray[np.intp], NDArray[np.intp]]]:
-    """Generate fixed-window purged walk-forward CV splits"""
+    """Generate fixed-window purged walk-forward CV splits.
+
+    purge_days: gap BEFORE test (prevents train leaking into test)
+    embargo_days: gap AFTER test (prevents next fold's train from
+                  seeing data temporally close to this fold's test)
+    """
     train_steps = train_days * 24
     test_steps = test_days * 24
     purge_steps = purge_days * 24
-    step_size = test_steps
+    embargo_steps = embargo_days * 24
+    step_size = test_steps + embargo_steps
     splits = []
     end_idx = df_length
     for i in range(n_splits):

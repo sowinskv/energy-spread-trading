@@ -121,8 +121,19 @@ def model_table(
     console.print()
 
 
-def fold_results(metrics: dict, metrics_no_exits: dict, currency: str) -> None:
+def fold_results(metrics: dict, metrics_no_exits: dict, currency: str, fit_metrics: dict | None = None) -> None:
     console.print()
+
+    if fit_metrics:
+        gap = fit_metrics["train_r2"] - fit_metrics["test_r2"]
+        overfit_flag = "  !" if gap > 0.15 else ""
+        _kv("train r²", f"{fit_metrics['train_r2']:>14.3f}")
+        _kv("test r²", f"{fit_metrics['test_r2']:>14.3f}")
+        _kv("r² gap", f"{gap:>14.3f}{overfit_flag}", bold_value=gap > 0.15)
+        _kv("train mse", f"{fit_metrics['train_mse']:>14.2f}")
+        _kv("test mse", f"{fit_metrics['test_mse']:>14.2f}")
+        console.print()
+
     pnl = metrics["total_pnl"]
     pnl_ne = metrics_no_exits["total_pnl"]
 
@@ -148,6 +159,11 @@ def backtest_summary(
     avg_position: float,
     currency: str,
     n_folds: int,
+    naive_pnl: float | None = None,
+    naive_sharpe: float | None = None,
+    naive_hit_rate: float | None = None,
+    sharpe_ci: tuple[float, float] | None = None,
+    sharpe_p: float | None = None,
 ) -> None:
     console.print()
     _rule('"BACKTEST"')
@@ -163,6 +179,28 @@ def backtest_summary(
     _kv("hours traded", f"{avg_traded:>13.1f}%")
     _kv("avg trades / fold", f"{avg_trades:>14.0f}")
     _kv("avg position size", f"{avg_position:>14.2f}")
+
+    if sharpe_ci is not None and sharpe_p is not None:
+        console.print()
+        _kv("sharpe 95% ci", f"[{sharpe_ci[0]:>6.2f}, {sharpe_ci[1]:>5.2f}]")
+        _kv("sharpe p-value", f"{sharpe_p:>14.3f}", bold_value=sharpe_p < 0.05)
+
+    if naive_pnl is not None:
+        console.print()
+        _rule('"NAIVE BENCHMARK"')
+        console.print(Text(f"{INDENT}trade every analyst signal, no meta-label gating", style="dim"))
+        console.print()
+        _kv("naive pnl", f"{currency} {naive_pnl:>10.2f}")
+        _kv("naive sharpe", f"{naive_sharpe:>14.2f}" if naive_sharpe is not None else "           n/a")
+        _kv("naive hit rate", f"{naive_hit_rate:>13.1f}%" if naive_hit_rate is not None else "           n/a")
+        console.print()
+
+        pnl_lift = avg_pnl - naive_pnl if naive_pnl else 0
+        sharpe_lift = avg_sharpe - (naive_sharpe or 0)
+        hit_lift = avg_hit_rate - (naive_hit_rate or 0)
+        _kv("pnl lift", f"{currency} {pnl_lift:>10.2f}", bold_value=pnl_lift > 0)
+        _kv("sharpe lift", f"{sharpe_lift:>+14.2f}", bold_value=sharpe_lift > 0)
+        _kv("hit rate lift", f"{hit_lift:>+13.1f}pp", bold_value=hit_lift > 0)
 
     console.print()
     _rule()
