@@ -1,19 +1,10 @@
-import pandas as pd
 import numpy as np
-import xgboost as xgb
 import mlflow
 from omegaconf import OmegaConf
-from sklearn.pipeline import Pipeline
-from features import TimeSeriesImputer, EnergyFeatureEngineer
-from ensemble_models import EnsembleAnalyst, MultiHorizonEnsemble
 
-from src.trading.position_manager import TrailingStopManager
-from src.trading.exit_strategies import (
-    calculate_dynamic_exits, consensus_exit_rules, confidence_based_position_sizing,
-    detect_market_volatility_regime, multi_horizon_consensus, optimal_trading_hours
-)
-from src.trading.metrics import calculate_enhanced_meta_trading_metrics_with_exits, asymmetric_trading_loss
+from src.trading.metrics import calculate_enhanced_meta_trading_metrics_with_exits
 from src.core.data.loader import load_and_format_raw_data, get_expanding_walk_forward_splits
+from src.ml.trainer import FoldTrainer
 
 
 def main():
@@ -44,98 +35,15 @@ def main():
             
             train_df = df.iloc[train_idx]
             test_df = df.iloc[test_idx]
-            
-            split_meta_idx = len(train_df) - (config.cv.meta_train_days * 24)
-            primary_df = train_df.iloc[:split_meta_idx]
-            meta_df = train_df.iloc[split_meta_idx:]
-            preprocessor = Pipeline([
-                ('imputer', TimeSeriesImputer(bool_cols=bool_cols, numeric_cols=numeric_cols)),
-                ('feature_engineer', EnergyFeatureEngineer())
-            ])
-            
-            X_prim_prep = preprocessor.fit_transform(primary_df.drop(columns=config.data.leakage_cols))
-            y_prim = primary_df[config.data.target_col]
-            
-            X_meta_prep = preprocessor.transform(meta_df.drop(columns=config.data.leakage_cols))
-            y_meta = meta_df[config.data.target_col]
-            
-            X_test_prep = preprocessor.transform(test_df.drop(columns=config.data.leakage_cols))
-            y_test = test_df[config.data.target_col]
-            test_timestamps = test_df.index if hasattr(test_df, 'index') else None
 
             print("training...")
-            if config.ensemble.enable and config.ensemble.multi_horizon:
-                ensemble_analyst = MultiHorizonEnsemble(config, horizons=config.ensemble.horizons)
-                ensemble_analyst.fit(X_prim_prep, y_prim, primary_df.index)
-                
-                meta_analyst_preds = ensemble_analyst.predict(X_meta_prep, meta_df.index)
-                test_analyst_preds = ensemble_analyst.predict(X_test_prep, test_timestamps)
-                
-                meta_individual_preds = {}
-                test_individual_preds = {}
-                
-            elif config.ensemble.enable:
-                ensemble_analyst = EnsembleAnalyst(config)
-                ensemble_analyst.fit(X_prim_prep, y_prim)
-                
-                meta_analyst_preds = ensemble_analyst.predict(X_meta_prep)
-                test_analyst_preds = ensemble_analyst.predict(X_test_prep)
-                
-                meta_individual_preds = ensemble_analyst.get_individual_predictions(X_meta_prep)
-                test_individual_preds = ensemble_analyst.get_individual_predictions(X_test_prep)
-                
-                print(f"✓ ensemble: {len(ensemble_analyst.models)} models")
-                print(f"  weights: {ensemble_analyst.weights}")
-                
-            else:
-                print("fallback: single xgboost")
-                analyst = xgb.XGBRegressor(**config.model, objective=asymmetric_trading_loss)
-                analyst.fit(X_prim_prep, y_prim)
-                
-                meta_analyst_preds = analyst.predict(X_meta_prep)
-                test_analyst_preds = analyst.predict(X_test_prep)
-                
-                meta_individual_preds = {}
-                test_individual_preds = {}
+            trainer = FoldTrainer(config, bool_cols, numeric_cols)
+            result = trainer.run_fold(train_df, test_df)
             
-            meta_raw_pnl = np.sign(meta_analyst_preds) * y_meta - 0.5
-            meta_labels = (meta_raw_pnl > 0).astype(int)
-            
-            X_meta_enhanced = X_meta_prep.copy()
-            X_meta_enhanced['analyst_pred_ensemble'] = meta_analyst_preds
-            
-            if config.ensemble.enable and not config.ensemble.multi_horizon:
-                for model_name, preds in meta_individual_preds.items():
-                    X_meta_enhanced[f'analyst_pred_{model_name}'] = preds
-                
-                pred_values = list(meta_individual_preds.values())
-                X_meta_enhanced['prediction_variance'] = np.var(pred_values, axis=0)
-                X_meta_enhanced['prediction_range'] = np.max(pred_values, axis=0) - np.min(pred_values, axis=0)
-                X_meta_enhanced['model_consensus'] = np.mean([
-                    np.sign(pred) for pred in pred_values
-                ], axis=0)
-
-            meta_params = dict(config.meta_model)
-            meta_params.pop('confidence_threshold', None)
-
-            manager = xgb.XGBClassifier(**meta_params)
-            manager.fit(X_meta_enhanced, meta_labels)
-            
-            X_test_enhanced = X_test_prep.copy()
-            X_test_enhanced['analyst_pred_ensemble'] = test_analyst_preds
-            
-            if config.ensemble.enable and not config.ensemble.multi_horizon:
-                for model_name, preds in test_individual_preds.items():
-                    X_test_enhanced[f'analyst_pred_{model_name}'] = preds
-                
-                pred_values = list(test_individual_preds.values())
-                X_test_enhanced['prediction_variance'] = np.var(pred_values, axis=0)
-                X_test_enhanced['prediction_range'] = np.max(pred_values, axis=0) - np.min(pred_values, axis=0)
-                X_test_enhanced['model_consensus'] = np.mean([
-                    np.sign(pred) for pred in pred_values
-                ], axis=0)
-            
-            test_manager_probs = manager.predict_proba(X_test_enhanced)[:, 1]
+            y_test = result['y_test']
+            test_analyst_preds = result['test_analyst_preds']
+            test_manager_probs = result['test_manager_probs']
+            test_timestamps = result['test_timestamps']
             
             metrics_no_exits = calculate_enhanced_meta_trading_metrics_with_exits(
                 y_test, 

@@ -1,15 +1,11 @@
-import pandas as pd
 import numpy as np
 import optuna
 from omegaconf import OmegaConf
 import xgboost as xgb
-from sklearn.pipeline import Pipeline
-from features import TimeSeriesImputer, EnergyFeatureEngineer
-from ensemble_models import EnsembleAnalyst, MultiHorizonEnsemble
 from src.trading.metrics import calculate_enhanced_meta_trading_metrics_with_exits, asymmetric_trading_loss
 from src.core.data.loader import load_and_format_raw_data, get_purged_walk_forward_splits
+from src.ml.trainer import FoldTrainer
 import warnings
-import sqlite3
 
 warnings.filterwarnings("ignore")
 
@@ -113,23 +109,8 @@ def objective(trial):
         train_df = df.iloc[train_idx]
         test_df = df.iloc[test_idx]
         
-        split_meta_idx = len(train_df) - (config.cv.meta_train_days * 24)
-        primary_df = train_df.iloc[:split_meta_idx]
-        meta_df = train_df.iloc[split_meta_idx:]
-        
-        preprocessor = Pipeline([
-            ('imputer', TimeSeriesImputer(bool_cols=bool_cols, numeric_cols=numeric_cols)),
-            ('feature_engineer', EnergyFeatureEngineer())
-        ])
-        
-        X_prim_prep = preprocessor.fit_transform(primary_df.drop(columns=config.data.leakage_cols))
-        y_prim = primary_df[config.data.target_col]
-        
-        X_meta_prep = preprocessor.transform(meta_df.drop(columns=config.data.leakage_cols))
-        y_meta = meta_df[config.data.target_col]
-        
-        X_test_prep = preprocessor.transform(test_df.drop(columns=config.data.leakage_cols))
-        y_test = test_df[config.data.target_col]
+        trainer = FoldTrainer(config, bool_cols, numeric_cols)
+        data = trainer.prepare_fold_data(train_df, test_df)
 
         if use_ensemble:
             temp_config = OmegaConf.create({
@@ -162,49 +143,32 @@ def objective(trial):
                     }
                 }
             })
-            
-            if ensemble_params['multi_horizon']:
-                analyst = MultiHorizonEnsemble(temp_config)
-                analyst.fit(X_prim_prep, y_prim, primary_df.index)
-            else:
-                analyst = EnsembleAnalyst(temp_config)
-                analyst.fit(X_prim_prep, y_prim)
-            
-            if ensemble_params['multi_horizon']:
-                meta_analyst_preds = analyst.predict(X_meta_prep, meta_df.index)
-            else:
-                meta_analyst_preds = analyst.predict(X_meta_prep)
+            trainer.train_analyst(data['X_prim'], data['y_prim'], data['primary_df'].index, analyst_config=temp_config)
         else:
             analyst = xgb.XGBRegressor(**analyst_params, objective=asymmetric_trading_loss)
-            analyst.fit(X_prim_prep, y_prim)
-            meta_analyst_preds = analyst.predict(X_meta_prep)
+            analyst.fit(data['X_prim'], data['y_prim'])
+            trainer.analyst = analyst
+
+        meta_analyst_preds = trainer.predict_analyst(data['X_meta'], data['meta_df'].index)
+        meta_labels = trainer.create_meta_labels(meta_analyst_preds, data['y_meta'])
         
-        meta_raw_pnl = np.sign(meta_analyst_preds) * y_meta - 0.5
-        meta_labels = (meta_raw_pnl > 0).astype(int)
+        X_meta_enhanced = trainer.enhance_features(data['X_meta'], meta_analyst_preds, pred_col='analyst_pred')
+        trainer.train_manager(X_meta_enhanced, meta_labels, manager_params=manager_params)
         
-        X_meta_enhanced = X_meta_prep.copy()
-        X_meta_enhanced['analyst_pred'] = meta_analyst_preds
-        manager = xgb.XGBClassifier(**manager_params)
-        manager.fit(X_meta_enhanced, meta_labels)
-        
-        if use_ensemble and ensemble_params.get('multi_horizon'):
-            test_analyst_preds = analyst.predict(X_test_prep, test_df.index)
-        else:
-            test_analyst_preds = analyst.predict(X_test_prep)
-        X_test_enhanced = X_test_prep.copy()
-        X_test_enhanced['analyst_pred'] = test_analyst_preds
-        test_manager_probs = manager.predict_proba(X_test_enhanced)[:, 1]
+        test_analyst_preds = trainer.predict_analyst(data['X_test'], test_df.index)
+        X_test_enhanced = trainer.enhance_features(data['X_test'], test_analyst_preds, pred_col='analyst_pred')
+        test_manager_probs = trainer.manager.predict_proba(X_test_enhanced)[:, 1]
         
         try:
             temp_config_full = OmegaConf.create(OmegaConf.to_yaml(config))
             temp_config_full.meta_model.confidence_threshold = confidence_threshold
             
             metrics = calculate_enhanced_meta_trading_metrics_with_exits(
-                y_test, test_analyst_preds, test_manager_probs, temp_config_full, use_exit_rules=False
+                data['y_test'], test_analyst_preds, test_manager_probs, temp_config_full, use_exit_rules=False
             )
             hit_rate = metrics['hit_rate'] if not np.isnan(metrics['hit_rate']) else 0
         except:
-            y_true_np = np.array(y_test)
+            y_true_np = np.array(data['y_test'])
             y_pred_np = np.array(test_analyst_preds)
             meta_probs_np = np.array(test_manager_probs)
             
