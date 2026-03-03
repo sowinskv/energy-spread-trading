@@ -1,3 +1,4 @@
+import logging
 import numpy as np
 import optuna
 from omegaconf import OmegaConf
@@ -7,6 +8,7 @@ from src.core.data.loader import prepare_dataset, get_purged_walk_forward_splits
 from src.ml.trainer import FoldTrainer
 import warnings
 
+logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore")
 
 config = OmegaConf.load("config.yaml")
@@ -169,8 +171,13 @@ def objective(trial):
     return np.mean(fold_hit_rates)
 
 if __name__ == "__main__":
-    print("running optuna optimization for maximum hit rate...")
-    print("targeting high-performing models: XGBoost, Random Forest, Extra Trees (89% of ensemble)")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+    )
+
+    logger.info("running optuna optimization for maximum hit rate...")
+    logger.info("targeting high-performing models: XGBoost, Random Forest, Extra Trees (89%% of ensemble)")
     
     study = optuna.create_study(
     study_name="energy_hit_rate_optimization",
@@ -179,14 +186,17 @@ if __name__ == "__main__":
     direction='maximize')
     study.optimize(objective, n_trials=100)
     
-    print("\n" + "="*50)
-    print("optimization complete. best results:")
-    print(f"best cv hit rate: {study.best_value:.1f}%")
-    print("\noptimal parameters:")
+    results = [
+        "\n" + "=" * 50,
+        "optimization complete. best results:",
+        f"best cv hit rate: {study.best_value:.1f}%",
+        "\noptimal parameters:",
+    ]
     for key, value in study.best_params.items():
         if isinstance(value, float):
-            print(f"  {key}: {value:.4f}")
+            results.append(f"  {key}: {value:.4f}")
         else:
-            print(f"  {key}: {value}")
-    print("="*50)
-    print("update your config.yaml with these parameters.")
+            results.append(f"  {key}: {value}")
+    results.append("=" * 50)
+    results.append("update your config.yaml with these parameters.")
+    logger.info("\n".join(results))

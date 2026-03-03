@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import logging
 import pandas as pd
 import numpy as np
 from numpy.typing import NDArray
 from omegaconf import DictConfig
 
+logger = logging.getLogger(__name__)
+
 
 def load_and_format_raw_data(filepath: str) -> pd.DataFrame:
     """Load energy data CSV and format for pipeline consumption"""
-    print("loading data...")
+    logger.info("loading data...")
     df = pd.read_csv(filepath, low_memory=False)
     
     cols_to_exclude = ['date_cet', 'IS_ACTIVE_DOWN_SDAC_PL', 'IS_ACTIVE_UP_SDAC_PL']

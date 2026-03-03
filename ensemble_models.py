@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import numpy as np
 import pandas as pd
 import xgboost as xgb
@@ -11,6 +12,8 @@ from sklearn.linear_model import Ridge
 from sklearn.preprocessing import StandardScaler
 import pickle
 import mlflow
+
+logger = logging.getLogger(__name__)
 
 
 class EnsembleAnalyst:
@@ -108,18 +111,21 @@ class EnsembleAnalyst:
                 }
                 
             except Exception as e:
-                print(f"✗ {name} failed: {e}")
+                logger.error("model %s failed: %s", name, e)
                 del self.models[name]
         
         if individual_predictions:
             self.weights = self._calculate_performance_weights(X, y, individual_predictions)
         
         if verbose:
-            print("\n" + "=" * 60)
-            print(f"{'ENSEMBLE MODEL PERFORMANCE':^60}")
-            print("=" * 60)
-            print(f"{'MODEL':<15} {'R²':<8} {'MSE':<10} {'WEIGHT':<10}")
-            print("-" * 60)
+            lines = [
+                "",
+                "=" * 60,
+                f"{'ENSEMBLE MODEL PERFORMANCE':^60}",
+                "=" * 60,
+                f"{'MODEL':<15} {'R²':<8} {'MSE':<10} {'WEIGHT':<10}",
+                "-" * 60,
+            ]
             
             ensemble_r2 = 0
             ensemble_mse = 0
@@ -127,13 +133,14 @@ class EnsembleAnalyst:
             for name in sorted(model_performance.keys()):
                 perf = model_performance[name]
                 weight = self.weights.get(name, 0) if self.weights else 1/len(model_performance)
-                print(f"{name:<15} {perf['r2']:<8.3f} {perf['mse']:<10.4f} {weight:<10.3f}")
+                lines.append(f"{name:<15} {perf['r2']:<8.3f} {perf['mse']:<10.4f} {weight:<10.3f}")
                 ensemble_r2 += weight * perf['r2']
                 ensemble_mse += weight * perf['mse']
             
-            print("-" * 60)
-            print(f"{'Ensemble':<15} {ensemble_r2:<8.3f} {ensemble_mse:<10.4f} {'1.000':<10}")
-            print("=" * 60)
+            lines.append("-" * 60)
+            lines.append(f"{'Ensemble':<15} {ensemble_r2:<8.3f} {ensemble_mse:<10.4f} {'1.000':<10}")
+            lines.append("=" * 60)
+            logger.info("\n".join(lines))
         
         try:
             mlflow.log_params({
@@ -141,7 +148,7 @@ class EnsembleAnalyst:
                 f"ensemble_weights_{hash(str(self.weights))}": self.weights
             })
         except Exception as e:
-            print(f"mlflow warning: {e}")
+            logger.warning("mlflow logging failed: %s", e)
         
         return self
     
@@ -195,7 +202,7 @@ class EnsembleAnalyst:
                 else:
                     predictions[name] = model.predict(X)
             except Exception as e:
-                print(f"warning: {name} prediction failed: {e}")
+                logger.warning("prediction failed for %s: %s", name, e)
                 continue
         
         if not predictions:
@@ -223,7 +230,7 @@ class EnsembleAnalyst:
                 else:
                     predictions[name] = model.predict(X)
             except Exception as e:
-                print(f"warning: {name} prediction failed: {e}")
+                logger.warning("prediction failed for %s: %s", name, e)
                 predictions[name] = np.zeros(len(X))
         
         return predictions
@@ -268,13 +275,15 @@ class MultiHorizonEnsemble:
         
         self.horizon_weights = self._calculate_horizon_weights(X, y, timestamps)
         
-        print("\n" + "=" * 80)
-        print(f"{'MULTI-HORIZON ENSEMBLE TRAINING REPORT':^80}")
-        print("=" * 80)
-        print(f"HORIZON PERFORMANCE ({len(X)} samples)\n")
-        
-        print(f"{'Horizon':<10} {'R²':<8} {'MSE':<10} {'Weight':<10} {'Models':<8}")
-        print("-" * 50)
+        lines = [
+            "",
+            "=" * 80,
+            f"{'MULTI-HORIZON ENSEMBLE TRAINING REPORT':^80}",
+            "=" * 80,
+            f"HORIZON PERFORMANCE ({len(X)} samples)\n",
+            f"{'Horizon':<10} {'R²':<8} {'MSE':<10} {'Weight':<10} {'Models':<8}",
+            "-" * 50,
+        ]
         
         total_r2 = 0
         total_mse = 0
@@ -282,13 +291,14 @@ class MultiHorizonEnsemble:
         for horizon in sorted(horizon_performance.keys()):
             perf = horizon_performance[horizon]
             weight = self.horizon_weights.get(horizon, 1/len(self.horizons))
-            print(f"{horizon}h{'':<7} {perf['r2']:<8.3f} {perf['mse']:<10.4f} {weight:<10.3f} {perf['n_models']:<8}")
+            lines.append(f"{horizon}h{'':<7} {perf['r2']:<8.3f} {perf['mse']:<10.4f} {weight:<10.3f} {perf['n_models']:<8}")
             total_r2 += weight * perf['r2']
             total_mse += weight * perf['mse']
         
-        print("-" * 50)
-        print(f"{'Ensemble':<10} {total_r2:<8.3f} {total_mse:<10.4f} {'1.000':<10} {len(self.horizon_ensembles):<8}")
-        print(" " * 80)
+        lines.append("-" * 50)
+        lines.append(f"{'Ensemble':<10} {total_r2:<8.3f} {total_mse:<10.4f} {'1.000':<10} {len(self.horizon_ensembles):<8}")
+        lines.append(" " * 80)
+        logger.info("\n".join(lines))
         
         return self
     
