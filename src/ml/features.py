@@ -52,7 +52,10 @@ class EnergyFeatureEngineer(BaseEstimator, TransformerMixin):
         X["month_cos"] = np.cos(2 * np.pi * X["month"] / 12)
 
         X["day_of_week"] = X.index.dayofweek
+        X["dow_sin"] = np.sin(2 * np.pi * X["day_of_week"] / 7)
+        X["dow_cos"] = np.cos(2 * np.pi * X["day_of_week"] / 7)
         X["is_weekend"] = X["day_of_week"].isin([5, 6]).astype(int)
+        X["is_peak"] = X.index.hour.isin([6, 7, 8, 9, 16, 17, 18, 19, 20]).astype(int)
 
         # residual load is demand minus renewables
         X["residual_load"] = X["grid_demand_fcst"] - (X["fcst_pv_tot_gen"] + X["fcst_wi_tot_gen"])
@@ -77,13 +80,21 @@ class EnergyFeatureEngineer(BaseEstimator, TransformerMixin):
 
         X["sdac_rolling_mean_24h"] = X["SDAC_PL"].shift(24).rolling(window=24).mean()
         X["sdac_rolling_std_24h"] = X["SDAC_PL"].shift(24).rolling(window=24).std()
+        X["sdac_rolling_mean_168h"] = X["SDAC_PL"].shift(24).rolling(window=168).mean()
 
         # bollinger band width proxy (volatility indicator)
-        # adding 1e-5 to prevent division by zero when prices are exactly 0
         X["sdac_bb_width"] = (X["sdac_rolling_std_24h"] * 2) / (X["sdac_rolling_mean_24h"].abs() + 1e-5)
 
         # ewma (exponentially weighted moving average) for short-term trend
         X["sdac_ewma_24h"] = X["SDAC_PL"].shift(24).ewm(span=24).mean()
+
+        # renewable share of total generation (higher = more volatile prices)
+        total_gen = X["fcst_pv_tot_gen"] + X["fcst_wi_tot_gen"]
+        X["renewable_share"] = total_gen / (X["grid_demand_fcst"] + 1e-5)
+
+        # residual load rolling stats (shifted to prevent leakage)
+        X["residual_rolling_mean_24h"] = X["residual_load"].shift(24).rolling(window=24).mean()
+        X["residual_rolling_std_24h"] = X["residual_load"].shift(24).rolling(window=24).std()
 
         # clean up nans introduced by diff(), shift(), and rolling()
         # backfill catches the start of the dataset, fillna(0) acts as a final safety net

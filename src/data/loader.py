@@ -104,6 +104,12 @@ def load_and_format_raw_data(filepath: str) -> pd.DataFrame:
     df["target_rolling_mean_24h"] = df["spread_SDAC_IDA1_PL"].shift(24).rolling(window=24).mean()
     df["target_rolling_std_24h"] = df["spread_SDAC_IDA1_PL"].shift(24).rolling(window=24).std()
     df["target_rolling_mean_168h"] = df["spread_SDAC_IDA1_PL"].shift(24).rolling(window=168).mean()
+    df["target_rolling_std_48h"] = df["spread_SDAC_IDA1_PL"].shift(24).rolling(window=48).std()
+
+    # winsorize target at 1st/99th percentile to reduce outlier influence
+    spread = df["spread_SDAC_IDA1_PL"]
+    q01, q99 = spread.quantile(0.01), spread.quantile(0.99)
+    df["spread_SDAC_IDA1_PL"] = spread.clip(lower=q01, upper=q99)
 
     validate_dataframe(df, stage="after_formatting")
     data_loaded(filepath, len(df), len(df.columns))
