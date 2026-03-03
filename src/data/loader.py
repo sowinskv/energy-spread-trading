@@ -22,23 +22,22 @@ MAX_NAN_RATIO = 0.3
 
 def validate_dataframe(df: pd.DataFrame, stage: str = "raw") -> None:
     """Validate DataFrame quality. Raises ValueError on critical issues."""
+    from src.ui.display import warning as ui_warning
+
     if df.empty:
         raise ValueError(f"dataframe is empty at stage '{stage}'")
 
     nan_ratio = df.isna().mean()
     bad_cols = nan_ratio[nan_ratio > MAX_NAN_RATIO]
     if not bad_cols.empty:
-        logger.warning(
-            "high NaN ratio (>%.0f%%) in %d columns at stage '%s': %s",
-            MAX_NAN_RATIO * 100,
-            len(bad_cols),
-            stage,
-            ", ".join(bad_cols.index[:5].tolist()),
+        ui_warning(
+            f"high NaN ratio (>{MAX_NAN_RATIO * 100:.0f}%) in {len(bad_cols)} columns: "
+            f"{', '.join(bad_cols.index[:5].tolist())}"
         )
 
     if isinstance(df.index, pd.DatetimeIndex) and df.index.duplicated().any():
         n_dups = df.index.duplicated().sum()
-        logger.warning("%d duplicate timestamps found at stage '%s'", n_dups, stage)
+        ui_warning(f"{n_dups} duplicate timestamps found")
 
 
 def validate_config(config: DictConfig) -> None:
@@ -68,7 +67,7 @@ def validate_config(config: DictConfig) -> None:
 
 def load_and_format_raw_data(filepath: str) -> pd.DataFrame:
     """Load energy data CSV and format for pipeline consumption."""
-    logger.info("loading data...")
+    from src.ui.display import data_loaded
 
     try:
         df = pd.read_csv(filepath, low_memory=False)
@@ -107,6 +106,7 @@ def load_and_format_raw_data(filepath: str) -> pd.DataFrame:
     df["target_rolling_mean_168h"] = df["spread_SDAC_IDA1_PL"].shift(24).rolling(window=168).mean()
 
     validate_dataframe(df, stage="after_formatting")
+    data_loaded(filepath, len(df), len(df.columns))
     return df
 
 

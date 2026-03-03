@@ -109,29 +109,20 @@ class EnsembleAnalyst:
             self.weights = self._calculate_performance_weights(X, y, individual_predictions)
 
         if verbose:
-            lines = [
-                "",
-                "=" * 60,
-                f"{'ENSEMBLE MODEL PERFORMANCE':^60}",
-                "=" * 60,
-                f"{'MODEL':<15} {'R²':<8} {'MSE':<10} {'WEIGHT':<10}",
-                "-" * 60,
-            ]
+            from src.ui.display import model_table
 
+            model_data = []
             ensemble_r2 = 0
             ensemble_mse = 0
 
             for name in sorted(model_performance.keys()):
                 perf = model_performance[name]
                 weight = self.weights.get(name, 0) if self.weights else 1 / len(model_performance)
-                lines.append(f"{name:<15} {perf['r2']:<8.3f} {perf['mse']:<10.4f} {weight:<10.3f}")
+                model_data.append({"name": name, "r2": perf["r2"], "mse": perf["mse"], "weight": weight})
                 ensemble_r2 += weight * perf["r2"]
                 ensemble_mse += weight * perf["mse"]
 
-            lines.append("-" * 60)
-            lines.append(f"{'Ensemble':<15} {ensemble_r2:<8.3f} {ensemble_mse:<10.4f} {'1.000':<10}")
-            lines.append("=" * 60)
-            logger.info("\n".join(lines))
+            model_table(model_data, ensemble_r2, ensemble_mse)
 
         try:
             mlflow.log_params(
@@ -271,34 +262,20 @@ class MultiHorizonEnsemble:
 
         self.horizon_weights = self._calculate_horizon_weights(X, y, timestamps)
 
-        lines = [
-            "",
-            "=" * 80,
-            f"{'MULTI-HORIZON ENSEMBLE TRAINING REPORT':^80}",
-            "=" * 80,
-            f"HORIZON PERFORMANCE ({len(X)} samples)\n",
-            f"{'Horizon':<10} {'R²':<8} {'MSE':<10} {'Weight':<10} {'Models':<8}",
-            "-" * 50,
-        ]
+        from src.ui.display import horizon_table
 
+        horizon_data = []
         total_r2 = 0
         total_mse = 0
 
         for horizon in sorted(horizon_performance.keys()):
             perf = horizon_performance[horizon]
             weight = self.horizon_weights.get(horizon, 1 / len(self.horizons))
-            lines.append(
-                f"{horizon}h{'':<7} {perf['r2']:<8.3f} {perf['mse']:<10.4f} {weight:<10.3f} {perf['n_models']:<8}"
-            )
+            horizon_data.append({"label": f"{horizon}h", "r2": perf["r2"], "mse": perf["mse"], "weight": weight})
             total_r2 += weight * perf["r2"]
             total_mse += weight * perf["mse"]
 
-        lines.append("-" * 50)
-        lines.append(
-            f"{'Ensemble':<10} {total_r2:<8.3f} {total_mse:<10.4f} {'1.000':<10} {len(self.horizon_ensembles):<8}"
-        )
-        lines.append(" " * 80)
-        logger.info("\n".join(lines))
+        horizon_table(horizon_data, total_r2, total_mse, len(self.horizon_ensembles), len(X))
 
         return self
 

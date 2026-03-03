@@ -19,22 +19,20 @@ class TestValidateDataframe:
         with pytest.raises(ValueError, match="empty"):
             validate_dataframe(df)
 
-    def test_high_nan_ratio_warns(self, caplog):
+    def test_high_nan_ratio_warns(self, capsys):
         df = pd.DataFrame({"a": [1, np.nan, np.nan, np.nan, np.nan]})
-        with caplog.at_level("WARNING"):
-            validate_dataframe(df, stage="test")
-        assert "high NaN ratio" in caplog.text
+        validate_dataframe(df, stage="test")
+        assert "high NaN ratio" in capsys.readouterr().out
 
     def test_clean_dataframe_passes(self):
         df = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
         validate_dataframe(df)
 
-    def test_duplicate_timestamps_warns(self, caplog):
+    def test_duplicate_timestamps_warns(self, capsys):
         idx = pd.to_datetime(["2024-01-01", "2024-01-01", "2024-01-02"])
         df = pd.DataFrame({"a": [1, 2, 3]}, index=idx)
-        with caplog.at_level("WARNING"):
-            validate_dataframe(df, stage="test")
-        assert "duplicate timestamps" in caplog.text
+        validate_dataframe(df, stage="test")
+        assert "duplicate timestamps" in capsys.readouterr().out
 
 
 class TestValidateConfig:

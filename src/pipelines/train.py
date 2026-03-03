@@ -7,6 +7,7 @@ from omegaconf import OmegaConf
 from src.data.loader import get_expanding_walk_forward_splits, prepare_dataset
 from src.ml.trainer import FoldTrainer
 from src.trading.metrics import calculate_enhanced_meta_trading_metrics_with_exits
+from src.ui.display import backtest_summary, fold_header, fold_results, status
 
 logger = logging.getLogger(__name__)
 
@@ -36,12 +37,11 @@ def main():
         fold_position_sizes, fold_total_trades, fold_consensus_trades = [], [], []
 
         for fold, (train_idx, test_idx) in enumerate(splits, 1):
-            logger.info("\nFOLD %d", fold)
-
             train_df = df.iloc[train_idx]
             test_df = df.iloc[test_idx]
 
-            logger.info("training...")
+            fold_header(fold, len(train_idx), len(test_idx))
+            status("training...")
             trainer = FoldTrainer(config, bool_cols, numeric_cols)
             result = trainer.run_fold(train_df, test_df)
 
@@ -100,18 +100,7 @@ def main():
                 f"fold_{fold}_ConsensusRate", metrics["consensus_trades"] / max(1, metrics["total_trades"])
             )
 
-            fold_report = [
-                f"\n{'FOLD RESULTS':^40}",
-                "-" * 40,
-                f"{'PnL (exits)':<15} {config.trading.currency}{metrics['total_pnl']:>8.2f}",
-                f"{'PnL (no exits)':<15} {config.trading.currency}{metrics_no_exits['total_pnl']:>8.2f}",
-                f"{'Hit Rate':<15} {metrics['hit_rate']:>7.1f}%",
-                f"{'Trades':<15} {metrics['total_trades']:>8}",
-                f"{'Sharpe':<15} {metrics['sharpe_ratio']:>8.2f}",
-                f"{'Sortino':<15} {metrics['sortino_ratio']:>8.2f}",
-                f"{'Drawdown':<15} {config.trading.currency}{metrics['max_drawdown']:>8.2f}",
-            ]
-            logger.info("\n".join(fold_report))
+            fold_results(metrics, metrics_no_exits, config.trading.currency)
 
         avg_pnl = np.mean(fold_pnls)
         avg_sharpe = np.mean(fold_sharpes)
@@ -123,22 +112,19 @@ def main():
         avg_total_trades = np.mean(fold_total_trades)
         avg_consensus_rate = np.mean([c / max(1, t) for c, t in zip(fold_consensus_trades, fold_total_trades)])
 
-        backtest_report = [
-            "\n",
-            f"{'BACKTEST RESULTS':^50}",
-            "-" * 50,
-            f"{'PnL':<20} {config.trading.currency} {avg_pnl:.2f}",
-            f"{'Max Drawdown':<20} {config.trading.currency} {avg_dd:.2f}",
-            f"{'Sharpe Ratio':<20} {avg_sharpe:.2f}",
-            f"{'Sortino Ratio':<20} {avg_sortino:.2f}",
-            f"{'Hit Rate':<20} {avg_hit_rate:.1f}%",
-            f"{'Consensus Rate':<20} {avg_consensus_rate:.1%}",
-            f"{'Hours Traded':<20} {avg_traded:.1f}%",
-            f"{'Avg Trades / Fold':<20} {avg_total_trades:.0f}",
-            f"{'Avg Position Size':<20} {avg_position_size:.2f}",
-            " " * 50,
-        ]
-        logger.info("\n".join(backtest_report))
+        backtest_summary(
+            avg_pnl=avg_pnl,
+            avg_dd=avg_dd,
+            avg_sharpe=avg_sharpe,
+            avg_sortino=avg_sortino,
+            avg_hit_rate=avg_hit_rate,
+            avg_consensus=avg_consensus_rate,
+            avg_traded=avg_traded,
+            avg_trades=avg_total_trades,
+            avg_position=avg_position_size,
+            currency=config.trading.currency,
+            n_folds=len(splits),
+        )
 
         mlflow.log_metric("avg_PnL", avg_pnl)
         mlflow.log_metric("avg_Sharpe", avg_sharpe)
