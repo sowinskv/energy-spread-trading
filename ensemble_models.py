@@ -262,11 +262,10 @@ class MultiHorizonEnsemble:
         
         self.horizon_weights = self._calculate_horizon_weights(X, y, timestamps)
         
-
-        print("\n" + " " * 80)
-        print(f"{'ENSEMBLE TRAINING REPORT':^40}")
-        print(" " * 80)
-        print(f"({len(X)} samples)\n")
+        print("\n" + "=" * 80)
+        print(f"{'MULTI-HORIZON ENSEMBLE TRAINING REPORT':^80}")
+        print("=" * 80)
+        print(f"HORIZON PERFORMANCE ({len(X)} samples)\n")
         
         print(f"{'Horizon':<10} {'R²':<8} {'MSE':<10} {'Weight':<10} {'Models':<8}")
         print("-" * 50)

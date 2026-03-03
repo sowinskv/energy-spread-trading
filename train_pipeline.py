@@ -333,7 +333,6 @@ def calculate_enhanced_meta_trading_metrics_with_exits(
     }
 
 def load_and_format_raw_data(filepath):
-    print("loading data...")
     df = pd.read_csv(filepath, low_memory=False)
     
     cols_to_exclude = ['date_cet', 'IS_ACTIVE_DOWN_SDAC_PL', 'IS_ACTIVE_UP_SDAC_PL']
@@ -404,8 +403,6 @@ def main():
         fold_pnls, fold_sharpes, fold_dds, fold_traded = [], [], [], []
         fold_hit_rates, fold_sortinos = [], []
         fold_position_sizes, fold_total_trades, fold_consensus_trades = [], [], []
-
-        print("starting the pipeline...")
 
         for fold, (train_idx, test_idx) in enumerate(splits, 1):
             print(f"\nFOLD {fold}")
