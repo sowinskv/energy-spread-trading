@@ -17,6 +17,7 @@ data:
     - "IDA3_SK"
 
 cv:
+  initial_train_days: 270
   train_days: 180
   meta_train_days: 60
   test_days: 30

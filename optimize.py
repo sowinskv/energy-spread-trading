@@ -11,18 +11,21 @@ import warnings
 logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore")
 
-config = OmegaConf.load("config.yaml")
-df, bool_cols, numeric_cols = prepare_dataset(config)
 
-splits = get_purged_walk_forward_splits(
-    df_length=len(df),
-    train_days=config.cv.train_days,
-    test_days=config.cv.test_days,
-    purge_days=config.cv.purge_days,
-    n_splits=config.cv.n_splits
-)
+def _load_data():
+    config = OmegaConf.load("config.yaml")
+    df, bool_cols, numeric_cols = prepare_dataset(config)
+    splits = get_purged_walk_forward_splits(
+        df_length=len(df),
+        train_days=config.cv.train_days,
+        test_days=config.cv.test_days,
+        purge_days=config.cv.purge_days,
+        n_splits=config.cv.n_splits,
+    )
+    return config, df, bool_cols, numeric_cols, splits
 
-def objective(trial):
+
+def objective(trial, config, df, bool_cols, numeric_cols, splits):
     use_ensemble = trial.suggest_categorical('use_ensemble', [True, False])
     
     if use_ensemble:
@@ -177,15 +180,21 @@ if __name__ == "__main__":
         format="%(message)s",
     )
 
+    config, df, bool_cols, numeric_cols, splits = _load_data()
+
     logger.info("running optuna optimization for maximum hit rate...")
     logger.info("targeting high-performing models: XGBoost, Random Forest, Extra Trees (89%% of ensemble)")
     
     study = optuna.create_study(
-    study_name="energy_hit_rate_optimization",
-    storage="sqlite:///optuna_study.db",
-    load_if_exists=True,
-    direction='maximize')
-    study.optimize(objective, n_trials=100)
+        study_name="energy_hit_rate_optimization",
+        storage="sqlite:///optuna_study.db",
+        load_if_exists=True,
+        direction="maximize",
+    )
+    study.optimize(
+        lambda trial: objective(trial, config, df, bool_cols, numeric_cols, splits),
+        n_trials=100,
+    )
     
     results = [
         "\n" + "=" * 50,

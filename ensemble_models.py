@@ -21,7 +21,6 @@ class EnsembleAnalyst:
         self.config = config
         self.models = {}
         self.weights = None
-        self.performance_history = []
         self.scaler = StandardScaler()
         self._init_models()
     
@@ -84,7 +83,6 @@ class EnsembleAnalyst:
     
     def fit(self, X: pd.DataFrame, y: pd.Series, verbose: bool = True) -> EnsembleAnalyst:
         X_scaled = self.scaler.fit_transform(X)
-        X_df = pd.DataFrame(X_scaled, columns=X.columns, index=X.index)
         
         individual_predictions = {}
         model_performance = {}
@@ -255,9 +253,9 @@ class EnsembleAnalyst:
 
 
 class MultiHorizonEnsemble:
-    def __init__(self, config: DictConfig, horizons: list[int] = [1, 4, 12, 24]) -> None:
+    def __init__(self, config: DictConfig, horizons: list[int] | None = None) -> None:
         self.config = config
-        self.horizons = horizons
+        self.horizons = horizons or [1, 4, 12, 24]
         self.horizon_ensembles = {}
         self.horizon_weights = None
     

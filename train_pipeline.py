@@ -24,7 +24,7 @@ def main():
 
         splits = get_expanding_walk_forward_splits(
             df_length=len(df),
-            initial_train_days=270,  
+            initial_train_days=config.cv.initial_train_days,
             test_days=config.cv.test_days,
             purge_days=config.cv.purge_days,
             n_splits=config.cv.n_splits
@@ -121,7 +121,6 @@ def main():
         avg_total_trades = np.mean(fold_total_trades)
         avg_consensus_rate = np.mean([c/max(1,t) for c,t in zip(fold_consensus_trades, fold_total_trades)])
         
-        exit_status = "Enabled" if config.exit_rules.enable else "Disabled"
         backtest_report = [
             "\n",
             f"{'BACKTEST RESULTS':^50}",
