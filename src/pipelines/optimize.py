@@ -3,12 +3,11 @@ import warnings
 
 import numpy as np
 import optuna
-import xgboost as xgb
 from omegaconf import OmegaConf
 
 from src.data.loader import get_purged_walk_forward_splits, prepare_dataset
 from src.ml.trainer import FoldTrainer
-from src.trading.metrics import asymmetric_trading_loss, calculate_enhanced_meta_trading_metrics_with_exits
+from src.trading.metrics import calculate_enhanced_meta_trading_metrics_with_exits
 
 logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore")
@@ -28,134 +27,81 @@ def _load_data():
     return config, df, bool_cols, numeric_cols, splits
 
 
-PEAK_HOUR_PRESETS = {
-    "standard": (6, 7, 8, 9, 16, 17, 18, 19, 20),
-    "morning_heavy": (5, 6, 7, 8, 9, 10, 17, 18, 19),
-    "evening_heavy": (7, 8, 9, 15, 16, 17, 18, 19, 20, 21),
-    "narrow": (7, 8, 9, 17, 18, 19),
-    "wide": (5, 6, 7, 8, 9, 10, 15, 16, 17, 18, 19, 20, 21),
-}
-
-
 def objective(trial, config, df, bool_cols, numeric_cols, splits):
-    # --- feature engineering params ---
-    peak_preset = trial.suggest_categorical("peak_hours", list(PEAK_HOUR_PRESETS.keys()))
-    peak_hours = PEAK_HOUR_PRESETS[peak_preset]
+    # --- analyst models (regularized ranges) ---
+    xgb_params = {
+        "n_estimators": trial.suggest_int("xgb_n_estimators", 50, 150, step=10),
+        "max_depth": trial.suggest_int("xgb_max_depth", 2, 5),
+        "learning_rate": trial.suggest_float("xgb_lr", 0.01, 0.15, log=True),
+        "subsample": trial.suggest_float("xgb_subsample", 0.6, 0.9),
+        "colsample_bytree": trial.suggest_float("xgb_colsample", 0.5, 0.9),
+        "min_child_weight": trial.suggest_int("xgb_min_child_weight", 10, 50),
+    }
 
-    # --- architecture ---
-    use_ensemble = trial.suggest_categorical("use_ensemble", [True, False])
+    rf_params = {
+        "n_estimators": trial.suggest_int("rf_n_estimators", 100, 300, step=50),
+        "max_depth": trial.suggest_int("rf_max_depth", 3, 8),
+        "min_samples_split": trial.suggest_int("rf_min_samples_split", 10, 40),
+        "min_samples_leaf": trial.suggest_int("rf_min_samples_leaf", 5, 20),
+        "max_features": trial.suggest_categorical("rf_max_features", ["sqrt", "log2", 0.5, 0.7]),
+    }
 
-    if use_ensemble:
-        ensemble_params = {
-            "enable": True,
-            "models": ["xgboost", "random_forest", "extra_trees", "ridge"],
-            "reweight_frequency": trial.suggest_categorical("reweight_frequency", [168, 336, 720, 1440]),
-            "performance_window": trial.suggest_categorical("performance_window", [48, 168, 336, 720]),
-            "multi_horizon": trial.suggest_categorical("multi_horizon", [True, False]),
-        }
+    et_params = {
+        "n_estimators": trial.suggest_int("et_n_estimators", 100, 300, step=50),
+        "max_depth": trial.suggest_int("et_max_depth", 3, 8),
+        "min_samples_split": trial.suggest_int("et_min_samples_split", 10, 40),
+        "min_samples_leaf": trial.suggest_int("et_min_samples_leaf", 5, 20),
+        "max_features": trial.suggest_categorical("et_max_features", ["sqrt", "log2", 0.5, 0.7]),
+    }
 
-        if ensemble_params["multi_horizon"]:
-            horizon_choice = trial.suggest_categorical("horizons", ["short", "medium", "long", "extended"])
-            horizon_map = {"short": [1, 4], "medium": [1, 4, 12], "long": [1, 4, 12, 24], "extended": [1, 2, 6, 12, 24]}
-            ensemble_params["horizons"] = horizon_map[horizon_choice]
+    ridge_alpha = trial.suggest_float("ridge_alpha", 0.1, 50.0, log=True)
 
-        analyst_params = {
-            "n_estimators": trial.suggest_int("xgb_n_estimators", 50, 300, step=25),
-            "max_depth": trial.suggest_int("xgb_max_depth", 4, 12),
-            "learning_rate": trial.suggest_float("xgb_lr", 0.003, 0.08, log=True),
-            "subsample": trial.suggest_float("xgb_subsample", 0.6, 1.0),
-            "colsample_bytree": trial.suggest_float("xgb_colsample", 0.5, 1.0),
-        }
+    # --- fixed architecture: ensemble, no multi-horizon ---
+    ensemble_params = {
+        "enable": True,
+        "models": ["xgboost", "random_forest", "extra_trees", "ridge"],
+        "reweight_frequency": trial.suggest_categorical("reweight_frequency", [168, 336, 720]),
+        "performance_window": trial.suggest_categorical("performance_window", [24, 168, 336]),
+        "multi_horizon": False,
+    }
 
-        rf_params = {
-            "n_estimators": trial.suggest_int("rf_n_estimators", 100, 600, step=50),
-            "max_depth": trial.suggest_int("rf_max_depth", 8, 30),
-            "min_samples_split": trial.suggest_int("rf_min_samples_split", 2, 15),
-            "min_samples_leaf": trial.suggest_int("rf_min_samples_leaf", 1, 8),
-            "max_features": trial.suggest_categorical("rf_max_features", ["sqrt", "log2", 0.5, 0.7, 0.8, 0.9]),
-        }
-
-        et_params = {
-            "n_estimators": trial.suggest_int("et_n_estimators", 100, 600, step=50),
-            "max_depth": trial.suggest_int("et_max_depth", 8, 30),
-            "min_samples_split": trial.suggest_int("et_min_samples_split", 2, 15),
-            "min_samples_leaf": trial.suggest_int("et_min_samples_leaf", 1, 8),
-            "max_features": trial.suggest_categorical("et_max_features", ["sqrt", "log2", 0.5, 0.7, 0.8, 0.9]),
-        }
-
-        ridge_alpha = trial.suggest_float("ridge_alpha", 0.01, 100.0, log=True)
-    else:
-        analyst_params = {
-            "n_estimators": trial.suggest_int("analyst_n_estimators", 100, 400, step=50),
-            "max_depth": trial.suggest_int("analyst_max_depth", 4, 12),
-            "learning_rate": trial.suggest_float("analyst_lr", 0.005, 0.1, log=True),
-            "subsample": trial.suggest_float("analyst_subsample", 0.5, 1.0),
-            "colsample_bytree": trial.suggest_float("analyst_colsample", 0.5, 1.0),
-            "random_state": 42,
-        }
-
-    # --- meta-model ---
+    # --- meta-model (regularized) ---
     manager_params = {
-        "n_estimators": trial.suggest_int("manager_n_estimators", 50, 300, step=50),
-        "max_depth": trial.suggest_int("manager_max_depth", 2, 7),
-        "learning_rate": trial.suggest_float("manager_lr", 0.005, 0.15, log=True),
+        "n_estimators": trial.suggest_int("manager_n_estimators", 30, 150, step=10),
+        "max_depth": trial.suggest_int("manager_max_depth", 2, 4),
+        "learning_rate": trial.suggest_float("manager_lr", 0.01, 0.1, log=True),
         "random_state": 42,
     }
 
-    confidence_threshold = trial.suggest_float("confidence_threshold", 0.30, 0.75)
+    confidence_threshold = trial.suggest_float("confidence_threshold", 0.40, 0.65)
 
     # --- cross-validation ---
+    fold_pnls = []
     fold_hit_rates = []
+    fold_trade_counts = []
 
     for train_idx, test_idx in splits:
         train_df = df.iloc[train_idx]
         test_df = df.iloc[test_idx]
 
-        # inject peak_hours into a temp config for the feature engineer
-        temp_base = OmegaConf.create(OmegaConf.to_yaml(config))
-        OmegaConf.update(temp_base, "features.peak_hours", list(peak_hours))
-
-        trainer = FoldTrainer(temp_base, bool_cols, numeric_cols)
+        trainer = FoldTrainer(config, bool_cols, numeric_cols)
         data = trainer.prepare_fold_data(train_df, test_df)
 
-        if use_ensemble:
-            temp_config = OmegaConf.create(
-                {
-                    "ensemble": ensemble_params,
-                    "model": analyst_params,
-                    "model_params": {
-                        "xgboost": {
-                            "n_estimators": analyst_params["n_estimators"],
-                            "max_depth": analyst_params["max_depth"],
-                            "learning_rate": analyst_params["learning_rate"],
-                            "subsample": analyst_params["subsample"],
-                            "colsample_bytree": analyst_params["colsample_bytree"],
-                        },
-                        "random_forest": {
-                            "n_estimators": rf_params["n_estimators"],
-                            "max_depth": rf_params["max_depth"],
-                            "min_samples_split": rf_params["min_samples_split"],
-                            "min_samples_leaf": rf_params["min_samples_leaf"],
-                            "max_features": rf_params["max_features"],
-                        },
-                        "extra_trees": {
-                            "n_estimators": et_params["n_estimators"],
-                            "max_depth": et_params["max_depth"],
-                            "min_samples_split": et_params["min_samples_split"],
-                            "min_samples_leaf": et_params["min_samples_leaf"],
-                            "max_features": et_params["max_features"],
-                        },
-                        "ridge": {"alpha": ridge_alpha},
-                    },
-                }
-            )
-            trainer.train_analyst(
-                data["X_prim"], data["y_prim"], data["primary_df"].index, analyst_config=temp_config, verbose=False
-            )
-        else:
-            analyst = xgb.XGBRegressor(**analyst_params, objective=asymmetric_trading_loss)
-            analyst.fit(data["X_prim"], data["y_prim"])
-            trainer.analyst = analyst
+        temp_config = OmegaConf.create(
+            {
+                "ensemble": ensemble_params,
+                "model": xgb_params,
+                "model_params": {
+                    "xgboost": xgb_params,
+                    "random_forest": rf_params,
+                    "extra_trees": et_params,
+                    "ridge": {"alpha": ridge_alpha},
+                },
+            }
+        )
+        trainer.train_analyst(
+            data["X_prim"], data["y_prim"], data["primary_df"].index, analyst_config=temp_config, verbose=False
+        )
 
         meta_analyst_preds = trainer.predict_analyst(data["X_meta"], data["meta_df"].index)
         meta_labels = trainer.create_meta_labels(meta_analyst_preds, data["y_meta"])
@@ -174,30 +120,33 @@ def objective(trial, config, df, bool_cols, numeric_cols, splits):
             metrics = calculate_enhanced_meta_trading_metrics_with_exits(
                 data["y_test"], test_analyst_preds, test_manager_probs, temp_config_full, use_exit_rules=False
             )
+            pnl = metrics["total_pnl"] if not np.isnan(metrics["total_pnl"]) else 0
             hit_rate = metrics["hit_rate"] if not np.isnan(metrics["hit_rate"]) else 0
-        except Exception as e:
-            logger.warning("metrics calculation failed, using fallback: %s", e)
-            y_true_np = np.array(data["y_test"])
-            y_pred_np = np.array(test_analyst_preds)
-            meta_probs_np = np.array(test_manager_probs)
+            n_trades = metrics["total_trades"]
+        except Exception:
+            pnl = 0
+            hit_rate = 0
+            n_trades = 0
 
-            intended_position = np.sign(y_pred_np)
-            trade_mask = (meta_probs_np > confidence_threshold).astype(int)
-            actual_position = intended_position * trade_mask
-
-            raw_pnl = actual_position * y_true_np
-            fees = trade_mask * 0.5
-            net_pnl = raw_pnl - fees
-
-            executed_trades = net_pnl[trade_mask == 1]
-            if len(executed_trades) > 0:
-                hit_rate = (executed_trades > 0).mean() * 100
-            else:
-                hit_rate = 0
-
+        fold_pnls.append(pnl)
         fold_hit_rates.append(hit_rate)
+        fold_trade_counts.append(n_trades)
 
-    return np.mean(fold_hit_rates)
+    avg_pnl = np.mean(fold_pnls)
+    avg_hit_rate = np.mean(fold_hit_rates)
+    avg_trades = np.mean(fold_trade_counts)
+
+    # --- composite objective: hit rate x PnL, penalize low trade volume ---
+    # gate: if fewer than 30 trades/fold on average, heavy penalty
+    if avg_trades < 30:
+        return 0.0
+
+    # normalize: hit_rate is 0-100, pnl can be anything
+    # score = hit_rate * log(1 + max(pnl, 0)) — rewards both, multiplicative
+    pnl_component = np.log1p(max(avg_pnl, 0))
+    score = avg_hit_rate * pnl_component
+
+    return score
 
 
 if __name__ == "__main__":
@@ -214,10 +163,10 @@ if __name__ == "__main__":
 
     config, df, bool_cols, numeric_cols, splits = _load_data()
 
-    _heading("01", "OPTIMIZE", "optuna / hit rate maximization")
-    status("xgboost + random forest + extra trees + ridge")
-    status("200 trials / purged walk-forward cv")
-    status("search: model params + winsorization + peak hours + ridge alpha")
+    _heading("01", "OPTIMIZE", "optuna / hit rate x pnl composite")
+    status("ensemble: xgboost + random forest + extra trees + ridge")
+    status("regularized ranges / no multi-horizon")
+    status("200 trials / purged walk-forward cv / min 30 trades gate")
     console.print()
 
     n_trials = 200
@@ -230,16 +179,16 @@ if __name__ == "__main__":
 
         t = Text()
         t.append(f"{INDENT}T {n:03d} / {n_trials}   ", style="dim")
-        t.append(f"{current:.1f}%", style="bold" if is_best else "")
+        t.append(f"{current:>8.1f}", style="bold" if is_best else "")
         t.append("   best ", style="dim")
-        t.append(f"{best:.1f}%", style="bold")
+        t.append(f"{best:>8.1f}", style="bold")
         if is_best:
             t.append("  ←", style="dim")
         console.print(t)
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     study = optuna.create_study(
-        study_name="energy_v2_features",
+        study_name="energy_v3_regularized",
         storage="sqlite:///optuna_study.db",
         load_if_exists=True,
         direction="maximize",
@@ -252,7 +201,7 @@ if __name__ == "__main__":
 
     _rule('"RESULTS"')
     console.print()
-    _kv("best cv hit rate", f"{study.best_value:.1f}%", bold_value=True)
+    _kv("best composite score", f"{study.best_value:.1f}", bold_value=True)
     console.print()
 
     _heading("02", "OPTIMAL PARAMETERS")

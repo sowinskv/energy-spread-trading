@@ -32,3 +32,5 @@ max_hr_config.yaml
 
 .pytest_cache/
 .ruff_cache/
+
+experiments/

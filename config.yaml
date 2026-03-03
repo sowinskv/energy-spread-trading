@@ -26,19 +26,20 @@ cv:
   n_splits: 4
 
 model:
-  n_estimators: 200
-  max_depth: 10
-  learning_rate: 0.0137
-  subsample: 0.8195
-  colsample_bytree: 0.7700
+  n_estimators: 70
+  max_depth: 2
+  learning_rate: 0.1
+  subsample: 0.8565
+  colsample_bytree: 0.5505
+  min_child_weight: 25
   random_state: 42
 
 meta_model:
-  n_estimators: 50
-  max_depth: 5
-  learning_rate: 0.0241
+  n_estimators: 60
+  max_depth: 3
+  learning_rate: 0.0686
   random_state: 42
-  confidence_threshold: 0.5800
+  confidence_threshold: 0.5975
 
 ensemble:
   enable: true
@@ -49,33 +50,33 @@ ensemble:
     - "ridge"
   reweight_frequency: 168
   performance_window: 24
-  multi_horizon: true
-  horizons: [1, 4, 12, 24]
+  multi_horizon: false
 
 model_params:
   xgboost:
-    n_estimators: 200
-    max_depth: 10
-    learning_rate: 0.0137
-    subsample: 0.8195
-    colsample_bytree: 0.7700
+    n_estimators: 70
+    max_depth: 2
+    learning_rate: 0.1
+    subsample: 0.8565
+    colsample_bytree: 0.5505
+    min_child_weight: 25
 
   random_forest:
-    n_estimators: 500
-    max_depth: 20
-    min_samples_split: 2
-    min_samples_leaf: 1
-    max_features: "log2"
+    n_estimators: 100
+    max_depth: 4
+    min_samples_split: 34
+    min_samples_leaf: 5
+    max_features: 0.7
 
   extra_trees:
-    n_estimators: 400
-    max_depth: 20
-    min_samples_split: 2
-    min_samples_leaf: 1
-    max_features: 0.8
+    n_estimators: 150
+    max_depth: 5
+    min_samples_split: 19
+    min_samples_leaf: 11
+    max_features: 0.5
 
   ridge:
-    alpha: 1.0
+    alpha: 35.1645
 
 exit_rules:
   enable: false
