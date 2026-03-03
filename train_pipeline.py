@@ -75,7 +75,6 @@ def consensus_exit_rules(current_positions, predictions_1h, predictions_4h, conf
         if current_positions[i] != 0:
             position_direction = np.sign(current_positions[i])
 
-            # Only exit if BOTH conditions are met: very low confidence AND strong opposing signals
             if (very_low_confidence[i] and 
                 direction_1h[i] == -position_direction and 
                 direction_4h[i] == -position_direction):
@@ -388,8 +387,6 @@ def main():
     mlflow.set_experiment(config.mlflow.experiment_name)
     
     with mlflow.start_run(run_name="xgboost_meta_labeling"):
-        
-        print("loading data...")
         df = load_and_format_raw_data(config.data.file_path)
         
         X_full = df.drop(columns=config.data.leakage_cols)
@@ -408,10 +405,10 @@ def main():
         fold_hit_rates, fold_sortinos = [], []
         fold_position_sizes, fold_total_trades, fold_consensus_trades = [], [], []
 
-        print("starting cv pipeline...")
+        print("starting the pipeline...")
 
         for fold, (train_idx, test_idx) in enumerate(splits, 1):
-            print(f"\n--- fold {fold} ---")
+            print(f"\nFOLD {fold}")
             
             train_df = df.iloc[train_idx]
             test_df = df.iloc[test_idx]
@@ -434,15 +431,13 @@ def main():
             y_test = test_df[config.data.target_col]
             test_timestamps = test_df.index if hasattr(test_df, 'index') else None
 
-            print("training ensemble...")
+            print("training...")
             if config.ensemble.enable and config.ensemble.multi_horizon:
                 ensemble_analyst = MultiHorizonEnsemble(config, horizons=config.ensemble.horizons)
                 ensemble_analyst.fit(X_prim_prep, y_prim, primary_df.index)
                 
                 meta_analyst_preds = ensemble_analyst.predict(X_meta_prep, meta_df.index)
                 test_analyst_preds = ensemble_analyst.predict(X_test_prep, test_timestamps)
-                
-                print(f"✓ multi-horizon ensemble: {len(config.ensemble.horizons)} horizons")
                 
                 meta_individual_preds = {}
                 test_individual_preds = {}
@@ -558,9 +553,16 @@ def main():
             mlflow.log_metric(f"fold_{fold}_TotalTrades", metrics['total_trades'])
             mlflow.log_metric(f"fold_{fold}_ConsensusRate", metrics['consensus_trades'] / max(1, metrics['total_trades']))
             
-            print(f"with exits: pnl {config.trading.currency}{metrics['total_pnl']:.2f} | hit rate {metrics['hit_rate']:.1f}% | trades {metrics['total_trades']}")
-            print(f"no exits:   pnl {config.trading.currency}{metrics_no_exits['total_pnl']:.2f} | hit rate {metrics_no_exits['hit_rate']:.1f}% | trades {metrics_no_exits['total_trades']}")
-            print(f"sharpe: {metrics['sharpe_ratio']:.2f} | sortino: {metrics['sortino_ratio']:.2f} | drawdown: {config.trading.currency}{metrics['max_drawdown']:.2f}")
+            print(f"\n{'FOLD RESULTS':^40}")
+            print("-" * 40)
+            print(f"{'PnL (exits)':<15} {config.trading.currency}{metrics['total_pnl']:>8.2f}")
+            print(f"{'PnL (no exits)':<15} {config.trading.currency}{metrics_no_exits['total_pnl']:>8.2f}")  
+            print(f"{'Hit Rate':<15} {metrics['hit_rate']:>7.1f}%")
+            print(f"{'Trades':<15} {metrics['total_trades']:>8}")
+            print(f"{'Sharpe':<15} {metrics['sharpe_ratio']:>8.2f}")
+            print(f"{'Sortino':<15} {metrics['sortino_ratio']:>8.2f}")
+            print(f"{'Drawdown':<15} {config.trading.currency}{metrics['max_drawdown']:>8.2f}")
+
 
         avg_pnl = np.mean(fold_pnls)
         avg_sharpe = np.mean(fold_sharpes)
@@ -572,12 +574,20 @@ def main():
         avg_total_trades = np.mean(fold_total_trades)
         avg_consensus_rate = np.mean([c/max(1,t) for c,t in zip(fold_consensus_trades, fold_total_trades)])
         
-        print("\n" + "="*50)
-        print(f"results (exit rules {'enabled' if config.exit_rules.enable else 'disabled'}):")
-        print(f"pnl: {config.trading.currency}{avg_pnl:.2f} | sharpe: {avg_sharpe:.2f} | sortino: {avg_sortino:.2f}")
-        print(f"drawdown: {config.trading.currency}{avg_dd:.2f} | hit rate: {avg_hit_rate:.1f}% | hours traded: {avg_traded:.1f}%")
-        print(f"avg trades per fold: {avg_total_trades:.0f} | avg size: {avg_position_size:.2f} | consensus rate: {avg_consensus_rate:.1%}")
-        print("="*50)
+        exit_status = "Enabled" if config.exit_rules.enable else "Disabled"
+        print("\n")
+        print(f"BACKTEST RESULTS".center(50))
+        print("-"*50)
+        print(f"{'PnL':<20} {config.trading.currency} {avg_pnl:.2f}")
+        print(f"{'Max Drawdown':<20} {config.trading.currency} {avg_dd:.2f}")
+        print(f"{'Sharpe Ratio':<20} {avg_sharpe:.2f}")
+        print(f"{'Sortino Ratio':<20} {avg_sortino:.2f}")
+        print(f"{'Hit Rate':<20} {avg_hit_rate:.1f}%")
+        print(f"{'Consensus Rate':<20} {avg_consensus_rate:.1%}")
+        print(f"{'Hours Traded':<20} {avg_traded:.1f}%")
+        print(f"{'Avg Trades / Fold':<20} {avg_total_trades:.0f}")
+        print(f"{'Avg Position Size':<20} {avg_position_size:.2f}")
+        print(" "*50)
         
         mlflow.log_metric("avg_PnL", avg_pnl)
         mlflow.log_metric("avg_Sharpe", avg_sharpe)

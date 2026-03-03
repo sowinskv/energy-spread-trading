@@ -19,7 +19,6 @@ class EnsembleAnalyst:
         self._init_models()
     
     def _init_models(self):
-        """Initialize only models that are enabled in the ensemble configuration"""
         for model_name in self.config.ensemble.models:
             if model_name == 'xgboost':
                 self.models['xgboost'] = xgb.XGBRegressor(
@@ -76,9 +75,7 @@ class EnsembleAnalyst:
                     n_jobs=-1
                 )
     
-    def fit(self, X, y):
-        print(f"training ensemble with {len(self.models)} models")
-        
+    def fit(self, X, y, verbose=True):
         X_scaled = self.scaler.fit_transform(X)
         X_df = pd.DataFrame(X_scaled, columns=X.columns, index=X.index)
         
@@ -86,8 +83,6 @@ class EnsembleAnalyst:
         model_performance = {}
         
         for name, model in self.models.items():
-            print(f"training {name}")
-            
             try:
                 if name in ['ridge']:
                     model.fit(X_scaled, y)
@@ -96,7 +91,6 @@ class EnsembleAnalyst:
                     model.fit(X, y)
                     individual_predictions[name] = model.predict(X)
                 
-                # Calculate individual model performance
                 pred = individual_predictions[name]
                 mse = np.mean((y - pred) ** 2)
                 mae = np.mean(np.abs(y - pred))
@@ -109,8 +103,6 @@ class EnsembleAnalyst:
                     'score': 1.0 / (1.0 + mse)
                 }
                 
-                print(f"✓ {name} trained | MSE: {mse:.4f} | R²: {r2:.3f}")
-                
             except Exception as e:
                 print(f"✗ {name} failed: {e}")
                 del self.models[name]
@@ -118,13 +110,26 @@ class EnsembleAnalyst:
         if individual_predictions:
             self.weights = self._calculate_performance_weights(X, y, individual_predictions)
         
-        # Display final model performance summary
-        print("\n=== MODEL PERFORMANCE SUMMARY ===")
-        for name in sorted(model_performance.keys()):
-            perf = model_performance[name]
-            weight = self.weights.get(name, 0) if self.weights else 1/len(model_performance)
-            print(f"{name:>15}: R²={perf['r2']:>6.3f} | MSE={perf['mse']:>8.4f} | Weight={weight:>6.3f}")
-        print("=" * 45)
+        if verbose:
+            print("\n" + "=" * 60)
+            print(f"{'ENSEMBLE MODEL PERFORMANCE':^60}")
+            print("=" * 60)
+            print(f"{'MODEL':<15} {'R²':<8} {'MSE':<10} {'WEIGHT':<10}")
+            print("-" * 60)
+            
+            ensemble_r2 = 0
+            ensemble_mse = 0
+            
+            for name in sorted(model_performance.keys()):
+                perf = model_performance[name]
+                weight = self.weights.get(name, 0) if self.weights else 1/len(model_performance)
+                print(f"{name:<15} {perf['r2']:<8.3f} {perf['mse']:<10.4f} {weight:<10.3f}")
+                ensemble_r2 += weight * perf['r2']
+                ensemble_mse += weight * perf['mse']
+            
+            print("-" * 60)
+            print(f"{'Ensemble':<15} {ensemble_r2:<8.3f} {ensemble_mse:<10.4f} {'1.000':<10}")
+            print("=" * 60)
         
         try:
             mlflow.log_params({
@@ -146,8 +151,6 @@ class EnsembleAnalyst:
         errors = {}
         performance_scores = {}
         
-        print(f"\n--- CALCULATING MODEL WEIGHTS (recent {recent_size} samples) ---")
-        
         for name, pred in predictions.items():
             if len(pred) >= recent_size:
                 recent_pred = pred[-recent_size:]
@@ -157,8 +160,6 @@ class EnsembleAnalyst:
                 
                 errors[name] = score
                 performance_scores[name] = {'mse': mse, 'mae': mae, 'score': score}
-                
-                print(f"{name:>15}: MSE={mse:>8.4f} | Score={score:>6.4f}")
         
         total_weight = sum(errors.values())
         weights = {name: weight / total_weight for name, weight in errors.items()}
@@ -170,10 +171,7 @@ class EnsembleAnalyst:
         total_weight = sum(weights.values())
         weights = {name: weight / total_weight for name, weight in weights.items()}
         
-        print("\n--- FINAL MODEL WEIGHTS ---")
-        for name, weight in sorted(weights.items()):
-            print(f"{name:>15}: {weight:>6.3f} ({weight*100:>5.1f}%)")
-        print("-" * 30)
+
         
         return weights
     
@@ -242,19 +240,14 @@ class MultiHorizonEnsemble:
         self.horizon_weights = None
     
     def fit(self, X, y, timestamps):
-        print(f"training multi-horizon ensemble for horizons: {self.horizons}")
-        
         horizon_performance = {}
         
         for horizon in self.horizons:
-            print(f"training horizon {horizon}h")
-            
             X_horizon = self._create_horizon_features(X, horizon)
             
             ensemble = EnsembleAnalyst(self.config)
-            ensemble.fit(X_horizon, y)
+            ensemble.fit(X_horizon, y, verbose=False)  # Suppress individual prints
             
-            # Test horizon performance
             pred_horizon = ensemble.predict(X_horizon)
             mse = np.mean((y - pred_horizon) ** 2)
             r2 = 1 - (np.sum((y - pred_horizon) ** 2) / np.sum((y - np.mean(y)) ** 2))
@@ -265,19 +258,32 @@ class MultiHorizonEnsemble:
                 'n_models': len(ensemble.models)
             }
             
-            print(f"horizon {horizon}h performance: R²={r2:.3f} | MSE={mse:.4f} | Models={len(ensemble.models)}")
-            
             self.horizon_ensembles[horizon] = ensemble
         
         self.horizon_weights = self._calculate_horizon_weights(X, y, timestamps)
         
-        # Display horizon performance summary
-        print("\n=== HORIZON PERFORMANCE SUMMARY ===")
+
+        print("\n" + " " * 80)
+        print(f"{'ENSEMBLE TRAINING REPORT':^40}")
+        print(" " * 80)
+        print(f"({len(X)} samples)\n")
+        
+        print(f"{'Horizon':<10} {'R²':<8} {'MSE':<10} {'Weight':<10} {'Models':<8}")
+        print("-" * 50)
+        
+        total_r2 = 0
+        total_mse = 0
+        
         for horizon in sorted(horizon_performance.keys()):
             perf = horizon_performance[horizon]
             weight = self.horizon_weights.get(horizon, 1/len(self.horizons))
-            print(f"Horizon {horizon:>2}h: R²={perf['r2']:>6.3f} | Weight={weight:>6.3f} | Models={perf['n_models']}")
-        print("=" * 45)
+            print(f"{horizon}h{'':<7} {perf['r2']:<8.3f} {perf['mse']:<10.4f} {weight:<10.3f} {perf['n_models']:<8}")
+            total_r2 += weight * perf['r2']
+            total_mse += weight * perf['mse']
+        
+        print("-" * 50)
+        print(f"{'Ensemble':<10} {total_r2:<8.3f} {total_mse:<10.4f} {'1.000':<10} {len(self.horizon_ensembles):<8}")
+        print(" " * 80)
         
         return self
     
