@@ -3,36 +3,14 @@ import optuna
 from omegaconf import OmegaConf
 import xgboost as xgb
 from src.trading.metrics import calculate_enhanced_meta_trading_metrics_with_exits, asymmetric_trading_loss
-from src.core.data.loader import load_and_format_raw_data, get_purged_walk_forward_splits
+from src.core.data.loader import prepare_dataset, get_purged_walk_forward_splits
 from src.ml.trainer import FoldTrainer
 import warnings
 
 warnings.filterwarnings("ignore")
 
-def calculate_meta_trading_metrics(y_true, y_pred, meta_probs, confidence_threshold=0.5, cost_per_mwh=0.5):
-    y_true_np = np.array(y_true)
-    y_pred_np = np.array(y_pred)
-    meta_probs_np = np.array(meta_probs)
-    
-    intended_position = np.sign(y_pred_np)
-    trade_mask = (meta_probs_np > confidence_threshold).astype(int)
-    actual_position = intended_position * trade_mask
-    
-    raw_pnl = actual_position * y_true_np
-    fees = trade_mask * cost_per_mwh
-    net_pnl = pd.Series(raw_pnl - fees)
-    
-    if net_pnl.std() != 0:
-        sharpe = (net_pnl.mean() / net_pnl.std()) * np.sqrt(8760)
-    else:
-        sharpe = 0.0
-    return sharpe
-
 config = OmegaConf.load("config.yaml")
-df = load_and_format_raw_data(config.data.file_path)
-X_full = df.drop(columns=config.data.leakage_cols)
-bool_cols = ['IS_ACTIVE_DOWN_SDAC_PL', 'IS_ACTIVE_UP_SDAC_PL']
-numeric_cols = [c for c in X_full.columns if c not in bool_cols]
+df, bool_cols, numeric_cols = prepare_dataset(config)
 
 splits = get_purged_walk_forward_splits(
     df_length=len(df),

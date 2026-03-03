@@ -35,6 +35,14 @@ def load_and_format_raw_data(filepath: str) -> pd.DataFrame:
     return df
 
 
+def prepare_dataset(config):
+    df = load_and_format_raw_data(config.data.file_path)
+    bool_cols = list(config.data.bool_cols)
+    X_full = df.drop(columns=config.data.leakage_cols)
+    numeric_cols = [c for c in X_full.columns if c not in bool_cols]
+    return df, bool_cols, numeric_cols
+
+
 def get_expanding_walk_forward_splits(df_length: int, initial_train_days: int, test_days: int, purge_days: int, n_splits: int):
     """Generate expanding window walk-forward CV splits"""
     initial_train_steps = initial_train_days * 24

@@ -3,7 +3,7 @@ import mlflow
 from omegaconf import OmegaConf
 
 from src.trading.metrics import calculate_enhanced_meta_trading_metrics_with_exits
-from src.core.data.loader import load_and_format_raw_data, get_expanding_walk_forward_splits
+from src.core.data.loader import prepare_dataset, get_expanding_walk_forward_splits
 from src.ml.trainer import FoldTrainer
 
 
@@ -12,11 +12,7 @@ def main():
     mlflow.set_experiment(config.mlflow.experiment_name)
     
     with mlflow.start_run(run_name="xgboost_meta_labeling"):
-        df = load_and_format_raw_data(config.data.file_path)
-        
-        X_full = df.drop(columns=config.data.leakage_cols)
-        bool_cols = ['IS_ACTIVE_DOWN_SDAC_PL', 'IS_ACTIVE_UP_SDAC_PL']
-        numeric_cols = [c for c in X_full.columns if c not in bool_cols]
+        df, bool_cols, numeric_cols = prepare_dataset(config)
 
         splits = get_expanding_walk_forward_splits(
             df_length=len(df),
