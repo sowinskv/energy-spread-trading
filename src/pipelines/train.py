@@ -6,7 +6,7 @@ from omegaconf import OmegaConf
 
 from src.data.loader import get_expanding_walk_forward_splits, prepare_dataset
 from src.ml.trainer import FoldTrainer
-from src.trading.metrics import calculate_enhanced_meta_trading_metrics_with_exits
+from src.trading.metrics import calculate_conviction_metrics
 from src.ui.display import backtest_summary, fold_header, fold_results, header, status
 
 logger = logging.getLogger(__name__)
@@ -47,7 +47,7 @@ def main():
     config = OmegaConf.load("config.yaml")
     mlflow.set_experiment(config.mlflow.experiment_name)
 
-    with mlflow.start_run(run_name="xgboost_meta_labeling"):
+    with mlflow.start_run(run_name="conviction_sizing"):
         header("ENERGY")
         df, bool_cols, numeric_cols = prepare_dataset(config)
 
@@ -62,8 +62,11 @@ def main():
 
         fold_pnls, fold_sharpes, fold_dds, fold_traded = [], [], [], []
         fold_hit_rates, fold_sortinos = [], []
-        fold_total_trades = []
+        fold_total_trades, fold_avg_sizes = [], []
         all_net_pnls: list[np.ndarray] = []
+
+        cost = config.trading.cost_per_mwh
+        max_pos = config.trading.get("max_position", 2.0)
 
         for fold, (train_idx, test_idx) in enumerate(splits, 1):
             train_df = df.iloc[train_idx]
@@ -76,23 +79,13 @@ def main():
 
             y_test = result["y_test"]
             test_preds = result["test_preds"]
-            test_timestamps = result["test_timestamps"]
             fit_metrics = result["fit_metrics"]
 
-            # all-trades: no meta-label gating, trade every signal
-            dummy_probs = np.ones(len(y_test))
-            metrics = calculate_enhanced_meta_trading_metrics_with_exits(
+            metrics = calculate_conviction_metrics(
                 y_test,
                 test_preds,
-                dummy_probs,
-                config,
-                confidence_threshold=0.0,
-                cost_per_mwh=config.trading.cost_per_mwh,
-                position_size_mwh=config.trading.position_size_mwh,
-                use_dynamic_thresholds=False,
-                use_confidence_sizing=False,
-                timestamps=test_timestamps,
-                use_exit_rules=False,
+                cost_per_mwh=cost,
+                max_position=max_pos,
             )
 
             fold_pnls.append(metrics["total_pnl"])
@@ -102,19 +95,18 @@ def main():
             fold_hit_rates.append(metrics["hit_rate"])
             fold_sortinos.append(metrics["sortino_ratio"])
             fold_total_trades.append(metrics["total_trades"])
+            fold_avg_sizes.append(metrics["avg_position_size"])
 
             mlflow.log_metric(f"fold_{fold}_PnL", metrics["total_pnl"])
             mlflow.log_metric(f"fold_{fold}_MaxDD", metrics["max_drawdown"])
             mlflow.log_metric(f"fold_{fold}_HitRate", metrics["hit_rate"])
             mlflow.log_metric(f"fold_{fold}_Sortino", metrics["sortino_ratio"])
             mlflow.log_metric(f"fold_{fold}_TotalTrades", metrics["total_trades"])
+            mlflow.log_metric(f"fold_{fold}_AvgSize", metrics["avg_position_size"])
 
             fold_results(metrics, config.trading.currency, fit_metrics=fit_metrics)
 
-            # collect per-trade PnLs for bootstrap significance
-            intended = np.sign(test_preds)
-            trade_pnls = intended * np.array(y_test) - config.trading.cost_per_mwh
-            all_net_pnls.append(trade_pnls)
+            all_net_pnls.append(metrics["net_pnls"])
 
         avg_pnl = np.mean(fold_pnls)
         avg_sharpe = np.mean(fold_sharpes)
@@ -123,6 +115,7 @@ def main():
         avg_dd = np.mean(fold_dds)
         avg_traded = np.mean(fold_traded)
         avg_total_trades = np.mean(fold_total_trades)
+        avg_position = np.mean(fold_avg_sizes)
 
         # bootstrap sharpe CI
         combined_pnls = np.concatenate(all_net_pnls) if all_net_pnls else np.array([0.0])
@@ -136,6 +129,7 @@ def main():
             avg_hit_rate=avg_hit_rate,
             avg_traded=avg_traded,
             avg_trades=avg_total_trades,
+            avg_position=avg_position,
             currency=config.trading.currency,
             n_folds=len(splits),
             sharpe_ci=bootstrap_ci,
@@ -149,6 +143,7 @@ def main():
         mlflow.log_metric("avg_MaxDD", avg_dd)
         mlflow.log_metric("avg_PercentTraded", avg_traded)
         mlflow.log_metric("avg_TotalTrades", avg_total_trades)
+        mlflow.log_metric("avg_AvgSize", avg_position)
 
 
 if __name__ == "__main__":

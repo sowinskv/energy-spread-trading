@@ -16,6 +16,73 @@ from .exit_strategies import (
 from .position_manager import TrailingStopManager
 
 
+def calculate_conviction_metrics(
+    y_true: pd.Series | NDArray[np.floating],
+    predictions: NDArray[np.floating],
+    cost_per_mwh: float = 0.5,
+    max_position: float = 2.0,
+    vol_lookback: int = 168,
+) -> dict[str, float | int | NDArray]:
+    """Conviction-based trading metrics — no binary gate, continuous sizing.
+
+    Position size = clip(|pred| / rolling_std(pred), 0, max_position).
+    PnL per hour = sign(pred) * size * actual_spread - cost * size.
+    """
+    y = np.asarray(y_true, dtype=float)
+    preds = np.asarray(predictions, dtype=float)
+    n = len(y)
+
+    # rolling prediction volatility for normalization
+    pred_series = pd.Series(preds)
+    rolling_vol = pred_series.rolling(vol_lookback, min_periods=24).std().bfill()
+    rolling_vol = rolling_vol.clip(lower=1e-6).values
+
+    # conviction = |prediction| / recent prediction volatility
+    conviction = np.abs(preds) / rolling_vol
+    position_sizes = np.clip(conviction, 0, max_position)
+
+    # direction from sign of prediction
+    direction = np.sign(preds)
+
+    # PnL calculation
+    gross_pnl = direction * position_sizes * y
+    costs = position_sizes * cost_per_mwh
+    net_pnl = gross_pnl - costs
+
+    equity = np.cumsum(net_pnl)
+
+    # metrics
+    total_pnl = float(equity[-1]) if n > 0 else 0.0
+
+    std = np.std(net_pnl)
+    sharpe = float((np.mean(net_pnl) / std) * np.sqrt(8760)) if std > 0 else 0.0
+
+    downside = net_pnl[net_pnl < 0]
+    ds_std = np.std(downside)
+    sortino = float((np.mean(net_pnl) / ds_std) * np.sqrt(8760)) if len(downside) > 0 and ds_std > 0 else sharpe
+
+    running_max = np.maximum.accumulate(equity)
+    max_dd = float(np.min(equity - running_max))
+
+    traded_mask = position_sizes > 0
+    n_trades = int(np.sum(traded_mask))
+    hit_rate = float(np.mean(net_pnl[traded_mask] > 0) * 100) if n_trades > 0 else 0.0
+    pct_traded = float(np.mean(traded_mask) * 100)
+    avg_size = float(np.mean(position_sizes[traded_mask])) if n_trades > 0 else 0.0
+
+    return {
+        "total_pnl": total_pnl,
+        "sharpe_ratio": sharpe,
+        "sortino_ratio": sortino,
+        "hit_rate": hit_rate,
+        "max_drawdown": max_dd,
+        "total_trades": n_trades,
+        "percent_traded": pct_traded,
+        "avg_position_size": avg_size,
+        "net_pnls": net_pnl,
+    }
+
+
 def calculate_enhanced_meta_trading_metrics_with_exits(
     y_true: pd.Series | NDArray[np.floating],
     y_pred: pd.Series | NDArray[np.floating],

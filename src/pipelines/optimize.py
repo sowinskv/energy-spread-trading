@@ -7,7 +7,7 @@ from omegaconf import OmegaConf
 
 from src.data.loader import get_purged_walk_forward_splits, prepare_dataset
 from src.ml.trainer import FoldTrainer
-from src.trading.metrics import calculate_enhanced_meta_trading_metrics_with_exits
+from src.trading.metrics import calculate_conviction_metrics
 
 logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore")
@@ -96,14 +96,10 @@ def objective(trial, config, df, bool_cols, numeric_cols, splits):
         test_preds = trainer.predict_analyst(data["X_test"], test_df.index)
 
         try:
-            # trade every signal, no gating
-            dummy_probs = np.ones(len(data["y_test"]))
-            metrics = calculate_enhanced_meta_trading_metrics_with_exits(
-                data["y_test"], test_preds, dummy_probs, config,
-                confidence_threshold=0.0,
-                use_dynamic_thresholds=False,
-                use_confidence_sizing=False,
-                use_exit_rules=False,
+            metrics = calculate_conviction_metrics(
+                data["y_test"], test_preds,
+                cost_per_mwh=config.trading.cost_per_mwh,
+                max_position=config.trading.get("max_position", 2.0),
             )
             pnl = metrics["total_pnl"] if not np.isnan(metrics["total_pnl"]) else 0
             hit_rate = metrics["hit_rate"] if not np.isnan(metrics["hit_rate"]) else 0

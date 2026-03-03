@@ -139,6 +139,7 @@ def fold_results(metrics: dict, currency: str, fit_metrics: dict | None = None) 
     _kv("pnl", f"{currency} {pnl:>10.2f}", bold_value=True)
     _kv("hit rate", f"{metrics['hit_rate']:>13.1f}%", bold_value=True)
     _kv("trades", f"{metrics['total_trades']:>14}")
+    _kv("avg size", f"{metrics['avg_position_size']:>14.2f}")
     _kv("sharpe", f"{metrics['sharpe_ratio']:>14.2f}", bold_value=True)
     _kv("sortino", f"{metrics['sortino_ratio']:>14.2f}")
     _kv("max drawdown", f"{currency} {metrics['max_drawdown']:>10.2f}")
@@ -153,6 +154,7 @@ def backtest_summary(
     avg_hit_rate: float,
     avg_traded: float,
     avg_trades: float,
+    avg_position: float,
     currency: str,
     n_folds: int,
     sharpe_ci: tuple[float, float] | None = None,
@@ -170,6 +172,7 @@ def backtest_summary(
     _kv("hit rate", f"{avg_hit_rate:>13.1f}%", bold_value=True)
     _kv("hours traded", f"{avg_traded:>13.1f}%")
     _kv("avg trades / fold", f"{avg_trades:>14.0f}")
+    _kv("avg position size", f"{avg_position:>14.2f}")
 
     if sharpe_ci is not None and sharpe_p is not None:
         console.print()
