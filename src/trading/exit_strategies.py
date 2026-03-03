@@ -27,13 +27,16 @@ def calculate_dynamic_exits(
                 profit_pct = 0
             age = position_age_hours[i]
 
-            if (age >= config.exit_rules.time_based.profit_take_hours and 
-                profit_pct >= config.exit_rules.time_based.profit_take_threshold):
+            if (
+                age >= config.exit_rules.time_based.profit_take_hours
+                and profit_pct >= config.exit_rules.time_based.profit_take_threshold
+            ):
                 exits[i] = 1
                 continue
 
-            stop_loss_pct = (config.exit_rules.time_based.initial_stop_loss + 
-                           age * config.exit_rules.time_based.stop_loss_decay)
+            stop_loss_pct = (
+                config.exit_rules.time_based.initial_stop_loss + age * config.exit_rules.time_based.stop_loss_decay
+            )
             if profit_pct <= stop_loss_pct:
                 exits[i] = 1
                 continue
@@ -54,7 +57,7 @@ def consensus_exit_rules(
     exits = np.zeros_like(current_positions)
     direction_1h = np.sign(predictions_1h)
     direction_4h = np.sign(predictions_4h)
-    
+
     confidence_threshold = config.exit_rules.position_management.confidence_exit_threshold
     avg_confidence = (np.abs(predictions_1h) + np.abs(predictions_4h)) / 2
     very_low_confidence = avg_confidence < (confidence_threshold * 0.5)
@@ -63,9 +66,11 @@ def consensus_exit_rules(
         if current_positions[i] != 0:
             position_direction = np.sign(current_positions[i])
 
-            if (very_low_confidence[i] and 
-                direction_1h[i] == -position_direction and 
-                direction_4h[i] == -position_direction):
+            if (
+                very_low_confidence[i]
+                and direction_1h[i] == -position_direction
+                and direction_4h[i] == -position_direction
+            ):
                 exits[i] = 1
     return exits
 
@@ -79,29 +84,29 @@ def confidence_based_position_sizing(
     """Calculate position sizes based on model confidence"""
     confidence_excess = np.maximum(0, meta_probs - min_confidence)
     confidence_normalized = confidence_excess / (1 - min_confidence)
-    
+
     multipliers = 1.0 + (max_multiplier - 1.0) * confidence_normalized
     positions = base_position * multipliers
-    
+
     return np.clip(positions, 0.1, max_multiplier * base_position)
 
 
 def detect_market_volatility_regime(returns: pd.Series, window: int = 72) -> str:
     """Detect current market volatility regime"""
     if len(returns) < window:
-        return 'normal'
-        
+        return "normal"
+
     recent_vol = returns.rolling(window).std().iloc[-1]
-    historical_vol = returns.rolling(window*3).std().mean()
-    
+    historical_vol = returns.rolling(window * 3).std().mean()
+
     vol_ratio = recent_vol / historical_vol if historical_vol > 0 else 1.0
-    
+
     if vol_ratio > 1.5:
-        return 'high_vol'  
+        return "high_vol"
     elif vol_ratio < 0.7:
-        return 'low_vol'   
+        return "low_vol"
     else:
-        return 'normal'
+        return "normal"
 
 
 def multi_horizon_consensus(
@@ -112,12 +117,12 @@ def multi_horizon_consensus(
     """Check for multi-horizon prediction consensus"""
     direction_1h = np.sign(predictions_1h)
     direction_4h = np.sign(predictions_4h)
-    
+
     agreement = (direction_1h == direction_4h) & (direction_1h != 0)
-    
+
     consensus_strength = (np.abs(predictions_1h) + np.abs(predictions_4h)) / 2
     strong_consensus = consensus_strength > np.percentile(consensus_strength, 75)
-    
+
     return agreement & strong_consensus
 
 
@@ -127,12 +132,12 @@ def optimal_trading_hours(
     """Determine optimal trading hours based on timestamp"""
     hours = timestamp_index.hour
     weekday = timestamp_index.dayofweek
-    
+
     active_hours = (hours >= 6) & (hours <= 22)
-    active_days = weekday < 5  
-    
+    active_days = weekday < 5
+
     peak_morning = (hours >= 8) & (hours <= 10)
     peak_evening = (hours >= 18) & (hours <= 20)
     peak_hours = peak_morning | peak_evening
-    
+
     return active_hours & active_days, peak_hours & active_days

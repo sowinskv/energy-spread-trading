@@ -6,8 +6,9 @@ import xgboost as xgb
 from numpy.typing import NDArray
 from omegaconf import DictConfig
 from sklearn.pipeline import Pipeline
-from features import TimeSeriesImputer, EnergyFeatureEngineer
+
 from ensemble_models import EnsembleAnalyst, MultiHorizonEnsemble
+from features import EnergyFeatureEngineer, TimeSeriesImputer
 from src.trading.metrics import asymmetric_trading_loss
 
 AnalystModel = EnsembleAnalyst | MultiHorizonEnsemble | xgb.XGBRegressor
@@ -25,10 +26,12 @@ class FoldTrainer:
         self.individual_preds_test: dict[str, NDArray[np.floating]] = {}
 
     def create_preprocessor(self) -> Pipeline:
-        self.preprocessor = Pipeline([
-            ('imputer', TimeSeriesImputer(bool_cols=self.bool_cols, numeric_cols=self.numeric_cols)),
-            ('feature_engineer', EnergyFeatureEngineer())
-        ])
+        self.preprocessor = Pipeline(
+            [
+                ("imputer", TimeSeriesImputer(bool_cols=self.bool_cols, numeric_cols=self.numeric_cols)),
+                ("feature_engineer", EnergyFeatureEngineer()),
+            ]
+        )
         return self.preprocessor
 
     def split_train_data(self, train_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -53,11 +56,14 @@ class FoldTrainer:
         y_test = test_df[self.config.data.target_col]
 
         return {
-            'primary_df': primary_df,
-            'meta_df': meta_df,
-            'X_prim': X_prim, 'y_prim': y_prim,
-            'X_meta': X_meta, 'y_meta': y_meta,
-            'X_test': X_test, 'y_test': y_test,
+            "primary_df": primary_df,
+            "meta_df": meta_df,
+            "X_prim": X_prim,
+            "y_prim": y_prim,
+            "X_meta": X_meta,
+            "y_meta": y_meta,
+            "X_test": X_test,
+            "y_test": y_test,
         }
 
     def train_analyst(
@@ -70,7 +76,7 @@ class FoldTrainer:
         cfg = analyst_config or self.config
 
         if cfg.ensemble.enable and cfg.ensemble.multi_horizon:
-            horizons = cfg.ensemble.get('horizons', [1, 4, 12, 24])
+            horizons = cfg.ensemble.get("horizons", [1, 4, 12, 24])
             self.analyst = MultiHorizonEnsemble(cfg, horizons=horizons)
             self.analyst.fit(X_prim, y_prim, primary_index)
         elif cfg.ensemble.enable:
@@ -104,21 +110,19 @@ class FoldTrainer:
         X: pd.DataFrame,
         analyst_preds: NDArray[np.floating],
         individual_preds: dict[str, NDArray[np.floating]] | None = None,
-        pred_col: str = 'analyst_pred_ensemble',
+        pred_col: str = "analyst_pred_ensemble",
     ) -> pd.DataFrame:
         X_enhanced = X.copy()
         X_enhanced[pred_col] = analyst_preds
 
         if individual_preds:
             for model_name, preds in individual_preds.items():
-                X_enhanced[f'analyst_pred_{model_name}'] = preds
+                X_enhanced[f"analyst_pred_{model_name}"] = preds
 
             pred_values = list(individual_preds.values())
-            X_enhanced['prediction_variance'] = np.var(pred_values, axis=0)
-            X_enhanced['prediction_range'] = np.max(pred_values, axis=0) - np.min(pred_values, axis=0)
-            X_enhanced['model_consensus'] = np.mean([
-                np.sign(pred) for pred in pred_values
-            ], axis=0)
+            X_enhanced["prediction_variance"] = np.var(pred_values, axis=0)
+            X_enhanced["prediction_range"] = np.max(pred_values, axis=0) - np.min(pred_values, axis=0)
+            X_enhanced["model_consensus"] = np.mean([np.sign(pred) for pred in pred_values], axis=0)
 
         return X_enhanced
 
@@ -130,7 +134,7 @@ class FoldTrainer:
     ) -> xgb.XGBClassifier:
         if manager_params is None:
             params = dict(self.config.meta_model)
-            params.pop('confidence_threshold', None)
+            params.pop("confidence_threshold", None)
         else:
             params = manager_params
 
@@ -147,32 +151,33 @@ class FoldTrainer:
         data = self.prepare_fold_data(train_df, test_df)
 
         self.train_analyst(
-            data['X_prim'], data['y_prim'],
-            primary_index=data['primary_df'].index,
+            data["X_prim"],
+            data["y_prim"],
+            primary_index=data["primary_df"].index,
             analyst_config=analyst_config,
         )
 
-        meta_preds = self.predict_analyst(data['X_meta'], data['meta_df'].index)
-        test_preds = self.predict_analyst(data['X_test'], test_df.index)
+        meta_preds = self.predict_analyst(data["X_meta"], data["meta_df"].index)
+        test_preds = self.predict_analyst(data["X_test"], test_df.index)
 
         cfg = analyst_config or self.config
-        use_individual = cfg.ensemble.enable and not cfg.ensemble.get('multi_horizon', False)
+        use_individual = cfg.ensemble.enable and not cfg.ensemble.get("multi_horizon", False)
 
-        meta_individual = self.get_individual_predictions(data['X_meta']) if use_individual else {}
-        test_individual = self.get_individual_predictions(data['X_test']) if use_individual else {}
+        meta_individual = self.get_individual_predictions(data["X_meta"]) if use_individual else {}
+        test_individual = self.get_individual_predictions(data["X_test"]) if use_individual else {}
 
-        meta_labels = self.create_meta_labels(meta_preds, data['y_meta'])
+        meta_labels = self.create_meta_labels(meta_preds, data["y_meta"])
 
-        X_meta_enhanced = self.enhance_features(data['X_meta'], meta_preds, meta_individual)
-        X_test_enhanced = self.enhance_features(data['X_test'], test_preds, test_individual)
+        X_meta_enhanced = self.enhance_features(data["X_meta"], meta_preds, meta_individual)
+        X_test_enhanced = self.enhance_features(data["X_test"], test_preds, test_individual)
 
         self.train_manager(X_meta_enhanced, meta_labels)
         test_manager_probs = self.manager.predict_proba(X_test_enhanced)[:, 1]
 
         return {
-            'y_test': data['y_test'],
-            'test_analyst_preds': test_preds,
-            'test_manager_probs': test_manager_probs,
-            'test_timestamps': test_df.index,
-            'X_test_enhanced': X_test_enhanced,
+            "y_test": data["y_test"],
+            "test_analyst_preds": test_preds,
+            "test_manager_probs": test_manager_probs,
+            "test_timestamps": test_df.index,
+            "X_test_enhanced": X_test_enhanced,
         }

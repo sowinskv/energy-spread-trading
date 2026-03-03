@@ -1,0 +1,50 @@
+[project]
+name = "energy-trading"
+version = "0.1.0"
+description = "Energy price spread forecasting and algorithmic trading pipeline"
+requires-python = ">=3.12"
+dependencies = [
+    "pandas>=2.3",
+    "numpy>=1.26,<2",
+    "scikit-learn>=1.5",
+    "xgboost>=1.7",
+    "lightgbm>=3.3",
+    "mlflow>=2.0",
+    "omegaconf>=2.3",
+    "optuna>=4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.9",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "RUF",  # ruff-specific
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "B905",   # zip strict (not needed everywhere)
+    "SIM108", # ternary operator (readability)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-v --tb=short"
