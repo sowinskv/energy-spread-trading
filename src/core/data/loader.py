@@ -8,11 +8,69 @@ from omegaconf import DictConfig
 
 logger = logging.getLogger(__name__)
 
+REQUIRED_COLUMNS = [
+    "SDAC_PL", "IDA1_PL", "date_cet",
+    "IS_ACTIVE_DOWN_SDAC_PL", "IS_ACTIVE_UP_SDAC_PL",
+]
+
+MAX_NAN_RATIO = 0.3
+
+
+def validate_dataframe(df: pd.DataFrame, stage: str = "raw") -> None:
+    """Validate DataFrame quality. Raises ValueError on critical issues."""
+    if df.empty:
+        raise ValueError(f"dataframe is empty at stage '{stage}'")
+
+    nan_ratio = df.isna().mean()
+    bad_cols = nan_ratio[nan_ratio > MAX_NAN_RATIO]
+    if not bad_cols.empty:
+        logger.warning(
+            "high NaN ratio (>%.0f%%) in %d columns at stage '%s': %s",
+            MAX_NAN_RATIO * 100,
+            len(bad_cols),
+            stage,
+            ", ".join(bad_cols.index[:5].tolist()),
+        )
+
+    if isinstance(df.index, pd.DatetimeIndex):
+        if df.index.duplicated().any():
+            n_dups = df.index.duplicated().sum()
+            logger.warning("%d duplicate timestamps found at stage '%s'", n_dups, stage)
+
+
+def validate_config(config: DictConfig) -> None:
+    """Validate config has all required keys. Raises KeyError on missing."""
+    required_paths = [
+        "data.file_path", "data.target_col", "data.leakage_cols",
+        "cv.train_days", "cv.test_days", "cv.purge_days", "cv.n_splits",
+        "model", "meta_model.confidence_threshold",
+    ]
+    from omegaconf import OmegaConf
+
+    for path in required_paths:
+        keys = path.split(".")
+        node = config
+        for key in keys:
+            if not OmegaConf.is_missing(node, key) and key in node:
+                node = node[key]
+            else:
+                raise KeyError(f"missing required config key: '{path}'")
+
 
 def load_and_format_raw_data(filepath: str) -> pd.DataFrame:
-    """Load energy data CSV and format for pipeline consumption"""
+    """Load energy data CSV and format for pipeline consumption."""
     logger.info("loading data...")
-    df = pd.read_csv(filepath, low_memory=False)
+
+    try:
+        df = pd.read_csv(filepath, low_memory=False)
+    except FileNotFoundError:
+        raise FileNotFoundError(f"data file not found: {filepath}")
+    except pd.errors.ParserError as e:
+        raise ValueError(f"failed to parse CSV '{filepath}': {e}")
+
+    missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
+    if missing:
+        raise ValueError(f"missing required columns: {missing}")
     
     cols_to_exclude = ['date_cet', 'IS_ACTIVE_DOWN_SDAC_PL', 'IS_ACTIVE_UP_SDAC_PL']
     numeric_cols = [col for col in df.columns if col not in cols_to_exclude]
@@ -38,11 +96,13 @@ def load_and_format_raw_data(filepath: str) -> pd.DataFrame:
     df['target_rolling_mean_24h'] = df['spread_SDAC_IDA1_PL'].shift(24).rolling(window=24).mean()
     df['target_rolling_std_24h'] = df['spread_SDAC_IDA1_PL'].shift(24).rolling(window=24).std()
     df['target_rolling_mean_168h'] = df['spread_SDAC_IDA1_PL'].shift(24).rolling(window=168).mean()
-    
+
+    validate_dataframe(df, stage="after_formatting")
     return df
 
 
 def prepare_dataset(config: DictConfig) -> tuple[pd.DataFrame, list[str], list[str]]:
+    validate_config(config)
     df = load_and_format_raw_data(config.data.file_path)
     bool_cols = list(config.data.bool_cols)
     X_full = df.drop(columns=config.data.leakage_cols)

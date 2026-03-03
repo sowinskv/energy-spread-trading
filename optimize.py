@@ -147,7 +147,8 @@ def objective(trial):
                 data['y_test'], test_analyst_preds, test_manager_probs, temp_config_full, use_exit_rules=False
             )
             hit_rate = metrics['hit_rate'] if not np.isnan(metrics['hit_rate']) else 0
-        except:
+        except Exception as e:
+            logger.warning("metrics calculation failed, using fallback: %s", e)
             y_true_np = np.array(data['y_test'])
             y_pred_np = np.array(test_analyst_preds)
             meta_probs_np = np.array(test_manager_probs)

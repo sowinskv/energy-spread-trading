@@ -149,7 +149,6 @@ def main():
         mlflow.log_metric("avg_TotalTrades", avg_total_trades)
         mlflow.log_metric("avg_ConsensusRate", avg_consensus_rate)
 
-        logger.info("\ntraining complete.")
 
 if __name__ == "__main__":
     main()

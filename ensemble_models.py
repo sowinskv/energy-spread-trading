@@ -236,13 +236,22 @@ class EnsembleAnalyst:
         return predictions
     
     def save(self, filepath: str) -> None:
-        with open(filepath, 'wb') as f:
-            pickle.dump(self, f)
+        try:
+            with open(filepath, 'wb') as f:
+                pickle.dump(self, f)
+        except OSError as e:
+            logger.error("failed to save ensemble to %s: %s", filepath, e)
+            raise
     
     @classmethod
     def load(cls, filepath: str) -> EnsembleAnalyst:
-        with open(filepath, 'rb') as f:
-            return pickle.load(f)
+        try:
+            with open(filepath, 'rb') as f:
+                return pickle.load(f)
+        except FileNotFoundError:
+            raise FileNotFoundError(f"ensemble file not found: {filepath}")
+        except (pickle.UnpicklingError, EOFError) as e:
+            raise ValueError(f"corrupted ensemble file '{filepath}': {e}")
 
 
 class MultiHorizonEnsemble:
