@@ -1,7 +1,11 @@
+from __future__ import annotations
+
 import numpy as np
 import pandas as pd
 import xgboost as xgb
 import lightgbm as lgb
+from numpy.typing import NDArray
+from omegaconf import DictConfig
 from sklearn.ensemble import RandomForestRegressor, ExtraTreesRegressor
 from sklearn.linear_model import Ridge
 from sklearn.preprocessing import StandardScaler
@@ -10,7 +14,7 @@ import mlflow
 
 
 class EnsembleAnalyst:
-    def __init__(self, config):
+    def __init__(self, config: DictConfig) -> None:
         self.config = config
         self.models = {}
         self.weights = None
@@ -18,7 +22,7 @@ class EnsembleAnalyst:
         self.scaler = StandardScaler()
         self._init_models()
     
-    def _init_models(self):
+    def _init_models(self) -> None:
         for model_name in self.config.ensemble.models:
             if model_name == 'xgboost':
                 self.models['xgboost'] = xgb.XGBRegressor(
@@ -75,7 +79,7 @@ class EnsembleAnalyst:
                     n_jobs=-1
                 )
     
-    def fit(self, X, y, verbose=True):
+    def fit(self, X: pd.DataFrame, y: pd.Series, verbose: bool = True) -> EnsembleAnalyst:
         X_scaled = self.scaler.fit_transform(X)
         X_df = pd.DataFrame(X_scaled, columns=X.columns, index=X.index)
         
@@ -141,7 +145,9 @@ class EnsembleAnalyst:
         
         return self
     
-    def _calculate_performance_weights(self, X, y, predictions):
+    def _calculate_performance_weights(
+        self, X: pd.DataFrame, y: pd.Series, predictions: dict[str, NDArray[np.floating]]
+    ) -> dict[str, float]:
         if len(predictions) < 2:
             return {name: 1.0 for name in self.models.keys()}
         
@@ -175,7 +181,7 @@ class EnsembleAnalyst:
         
         return weights
     
-    def predict(self, X):
+    def predict(self, X: pd.DataFrame) -> NDArray[np.floating]:
         if not self.models:
             raise ValueError("no trained models available")
         
@@ -206,7 +212,7 @@ class EnsembleAnalyst:
         
         return final_pred
     
-    def get_individual_predictions(self, X):
+    def get_individual_predictions(self, X: pd.DataFrame) -> dict[str, NDArray[np.floating]]:
         X_scaled = self.scaler.transform(X)
         
         predictions = {}
@@ -222,24 +228,24 @@ class EnsembleAnalyst:
         
         return predictions
     
-    def save(self, filepath):
+    def save(self, filepath: str) -> None:
         with open(filepath, 'wb') as f:
             pickle.dump(self, f)
     
     @classmethod
-    def load(cls, filepath):
+    def load(cls, filepath: str) -> EnsembleAnalyst:
         with open(filepath, 'rb') as f:
             return pickle.load(f)
 
 
 class MultiHorizonEnsemble:
-    def __init__(self, config, horizons=[1, 4, 12, 24]):
+    def __init__(self, config: DictConfig, horizons: list[int] = [1, 4, 12, 24]) -> None:
         self.config = config
         self.horizons = horizons
         self.horizon_ensembles = {}
         self.horizon_weights = None
     
-    def fit(self, X, y, timestamps):
+    def fit(self, X: pd.DataFrame, y: pd.Series, timestamps: pd.DatetimeIndex) -> MultiHorizonEnsemble:
         horizon_performance = {}
         
         for horizon in self.horizons:
@@ -286,7 +292,7 @@ class MultiHorizonEnsemble:
         
         return self
     
-    def _create_horizon_features(self, X, horizon):
+    def _create_horizon_features(self, X: pd.DataFrame, horizon: int) -> pd.DataFrame:
         X_horizon = X.copy()
         
         rolling_cols = [col for col in X.columns if 'rolling' in col or 'lag' in col]
@@ -297,7 +303,9 @@ class MultiHorizonEnsemble:
         
         return X_horizon.ffill().fillna(0)
     
-    def _calculate_horizon_weights(self, X, y, timestamps):
+    def _calculate_horizon_weights(
+        self, X: pd.DataFrame, y: pd.Series, timestamps: pd.DatetimeIndex
+    ) -> dict[int, float]:
         returns = y.diff().abs()
         recent_vol = returns.rolling(24).std().iloc[-1] if len(returns) > 24 else returns.std()
         
@@ -310,7 +318,7 @@ class MultiHorizonEnsemble:
         
         return {h: weights.get(h, 0.25) for h in self.horizons}
     
-    def predict(self, X, timestamps):
+    def predict(self, X: pd.DataFrame, timestamps: pd.DatetimeIndex) -> NDArray[np.floating]:
         horizon_predictions = {}
         
         for horizon, ensemble in self.horizon_ensembles.items():

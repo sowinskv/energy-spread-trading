@@ -1,6 +1,10 @@
+from __future__ import annotations
+
 import numpy as np
 import pandas as pd
+from numpy.typing import NDArray
 from typing import Dict, Any, Optional
+from omegaconf import DictConfig
 from .position_manager import TrailingStopManager
 from .exit_strategies import (
     calculate_dynamic_exits, consensus_exit_rules, confidence_based_position_sizing,
@@ -9,10 +13,18 @@ from .exit_strategies import (
 
 
 def calculate_enhanced_meta_trading_metrics_with_exits(
-    y_true, y_pred, meta_probs, config, confidence_threshold=0.5, 
-    cost_per_mwh=0.5, position_size_mwh=1.0,
-    use_dynamic_thresholds=True, use_confidence_sizing=True,
-    timestamps=None, use_exit_rules=True) -> Dict[str, Any]:
+    y_true: pd.Series | NDArray[np.floating],
+    y_pred: pd.Series | NDArray[np.floating],
+    meta_probs: NDArray[np.floating],
+    config: DictConfig,
+    confidence_threshold: float = 0.5,
+    cost_per_mwh: float = 0.5,
+    position_size_mwh: float = 1.0,
+    use_dynamic_thresholds: bool = True,
+    use_confidence_sizing: bool = True,
+    timestamps: pd.DatetimeIndex | None = None,
+    use_exit_rules: bool = True,
+) -> dict[str, float | int]:
     """Calculate comprehensive trading metrics with exit rule simulation"""
     
     y_true_np = np.array(y_true)
@@ -189,7 +201,9 @@ def calculate_enhanced_meta_trading_metrics_with_exits(
     }
 
 
-def asymmetric_trading_loss(y_true, y_pred):
+def asymmetric_trading_loss(
+    y_true: NDArray[np.floating], y_pred: NDArray[np.floating]
+) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
     """Custom loss function for trading that penalizes false positives heavily"""
     residual = y_pred - y_true
     grad = residual.copy()

@@ -1,17 +1,19 @@
+from __future__ import annotations
+
 import pandas as pd
 import numpy as np
 from sklearn.base import BaseEstimator, TransformerMixin
 
 class TimeSeriesImputer(BaseEstimator, TransformerMixin):
     """Handles multi-tier imputation as defined in prepare_data.py"""
-    def __init__(self, bool_cols, numeric_cols):
+    def __init__(self, bool_cols: list[str], numeric_cols: list[str]) -> None:
         self.bool_cols = bool_cols
         self.numeric_cols = numeric_cols
 
-    def fit(self, X, y=None):
+    def fit(self, X: pd.DataFrame, y: pd.Series | None = None) -> TimeSeriesImputer:
         return self
 
-    def transform(self, X):
+    def transform(self, X: pd.DataFrame) -> pd.DataFrame:
         X = X.copy()
         
         X[self.bool_cols] = X[self.bool_cols].ffill()
@@ -29,10 +31,10 @@ class TimeSeriesImputer(BaseEstimator, TransformerMixin):
 
 class EnergyFeatureEngineer(BaseEstimator, TransformerMixin):
     """handles temporal, spatial, regime, and fundamental features."""
-    def fit(self, X, y=None):
+    def fit(self, X: pd.DataFrame, y: pd.Series | None = None) -> EnergyFeatureEngineer:
         return self
 
-    def transform(self, X):
+    def transform(self, X: pd.DataFrame) -> pd.DataFrame:
         X = X.copy()
         
         X['hour'] = X.index.hour

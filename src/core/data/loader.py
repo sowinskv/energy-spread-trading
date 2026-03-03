@@ -1,5 +1,9 @@
+from __future__ import annotations
+
 import pandas as pd
 import numpy as np
+from numpy.typing import NDArray
+from omegaconf import DictConfig
 
 
 def load_and_format_raw_data(filepath: str) -> pd.DataFrame:
@@ -35,7 +39,7 @@ def load_and_format_raw_data(filepath: str) -> pd.DataFrame:
     return df
 
 
-def prepare_dataset(config):
+def prepare_dataset(config: DictConfig) -> tuple[pd.DataFrame, list[str], list[str]]:
     df = load_and_format_raw_data(config.data.file_path)
     bool_cols = list(config.data.bool_cols)
     X_full = df.drop(columns=config.data.leakage_cols)
@@ -43,7 +47,9 @@ def prepare_dataset(config):
     return df, bool_cols, numeric_cols
 
 
-def get_expanding_walk_forward_splits(df_length: int, initial_train_days: int, test_days: int, purge_days: int, n_splits: int):
+def get_expanding_walk_forward_splits(
+    df_length: int, initial_train_days: int, test_days: int, purge_days: int, n_splits: int
+) -> list[tuple[NDArray[np.intp], NDArray[np.intp]]]:
     """Generate expanding window walk-forward CV splits"""
     initial_train_steps = initial_train_days * 24
     test_steps = test_days * 24
@@ -65,7 +71,9 @@ def get_expanding_walk_forward_splits(df_length: int, initial_train_days: int, t
     return splits
 
 
-def get_purged_walk_forward_splits(df_length: int, train_days: int, test_days: int, purge_days: int, n_splits: int):
+def get_purged_walk_forward_splits(
+    df_length: int, train_days: int, test_days: int, purge_days: int, n_splits: int
+) -> list[tuple[NDArray[np.intp], NDArray[np.intp]]]:
     """Generate fixed-window purged walk-forward CV splits"""
     train_steps = train_days * 24
     test_steps = test_days * 24

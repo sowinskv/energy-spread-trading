@@ -1,37 +1,43 @@
+from __future__ import annotations
+
 import numpy as np
 import pandas as pd
 import xgboost as xgb
+from numpy.typing import NDArray
+from omegaconf import DictConfig
 from sklearn.pipeline import Pipeline
 from features import TimeSeriesImputer, EnergyFeatureEngineer
 from ensemble_models import EnsembleAnalyst, MultiHorizonEnsemble
 from src.trading.metrics import asymmetric_trading_loss
 
+AnalystModel = EnsembleAnalyst | MultiHorizonEnsemble | xgb.XGBRegressor
+
 
 class FoldTrainer:
-    def __init__(self, config, bool_cols, numeric_cols):
+    def __init__(self, config: DictConfig, bool_cols: list[str], numeric_cols: list[str]) -> None:
         self.config = config
         self.bool_cols = bool_cols
         self.numeric_cols = numeric_cols
-        self.preprocessor = None
-        self.analyst = None
-        self.manager = None
-        self.individual_preds_meta = {}
-        self.individual_preds_test = {}
+        self.preprocessor: Pipeline | None = None
+        self.analyst: AnalystModel | None = None
+        self.manager: xgb.XGBClassifier | None = None
+        self.individual_preds_meta: dict[str, NDArray[np.floating]] = {}
+        self.individual_preds_test: dict[str, NDArray[np.floating]] = {}
 
-    def create_preprocessor(self):
+    def create_preprocessor(self) -> Pipeline:
         self.preprocessor = Pipeline([
             ('imputer', TimeSeriesImputer(bool_cols=self.bool_cols, numeric_cols=self.numeric_cols)),
             ('feature_engineer', EnergyFeatureEngineer())
         ])
         return self.preprocessor
 
-    def split_train_data(self, train_df):
+    def split_train_data(self, train_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
         split_meta_idx = len(train_df) - (self.config.cv.meta_train_days * 24)
         primary_df = train_df.iloc[:split_meta_idx]
         meta_df = train_df.iloc[split_meta_idx:]
         return primary_df, meta_df
 
-    def prepare_fold_data(self, train_df, test_df):
+    def prepare_fold_data(self, train_df: pd.DataFrame, test_df: pd.DataFrame) -> dict[str, pd.DataFrame | pd.Series]:
         primary_df, meta_df = self.split_train_data(train_df)
         self.create_preprocessor()
 
@@ -54,7 +60,13 @@ class FoldTrainer:
             'X_test': X_test, 'y_test': y_test,
         }
 
-    def train_analyst(self, X_prim, y_prim, primary_index=None, analyst_config=None):
+    def train_analyst(
+        self,
+        X_prim: pd.DataFrame,
+        y_prim: pd.Series,
+        primary_index: pd.DatetimeIndex | None = None,
+        analyst_config: DictConfig | None = None,
+    ) -> AnalystModel:
         cfg = analyst_config or self.config
 
         if cfg.ensemble.enable and cfg.ensemble.multi_horizon:
@@ -70,23 +82,30 @@ class FoldTrainer:
 
         return self.analyst
 
-    def predict_analyst(self, X, timestamps=None):
+    def predict_analyst(self, X: pd.DataFrame, timestamps: pd.DatetimeIndex | None = None) -> NDArray[np.floating]:
         if isinstance(self.analyst, MultiHorizonEnsemble):
             return self.analyst.predict(X, timestamps)
         return self.analyst.predict(X)
 
-    def get_individual_predictions(self, X):
+    def get_individual_predictions(self, X: pd.DataFrame) -> dict[str, NDArray[np.floating]]:
         if isinstance(self.analyst, EnsembleAnalyst):
             return self.analyst.get_individual_predictions(X)
         return {}
 
     @staticmethod
-    def create_meta_labels(analyst_preds, y_true, cost_per_mwh=0.5):
+    def create_meta_labels(
+        analyst_preds: NDArray[np.floating], y_true: pd.Series, cost_per_mwh: float = 0.5
+    ) -> NDArray[np.integer]:
         raw_pnl = np.sign(analyst_preds) * y_true - cost_per_mwh
         return (raw_pnl > 0).astype(int)
 
     @staticmethod
-    def enhance_features(X, analyst_preds, individual_preds=None, pred_col='analyst_pred_ensemble'):
+    def enhance_features(
+        X: pd.DataFrame,
+        analyst_preds: NDArray[np.floating],
+        individual_preds: dict[str, NDArray[np.floating]] | None = None,
+        pred_col: str = 'analyst_pred_ensemble',
+    ) -> pd.DataFrame:
         X_enhanced = X.copy()
         X_enhanced[pred_col] = analyst_preds
 
@@ -103,7 +122,12 @@ class FoldTrainer:
 
         return X_enhanced
 
-    def train_manager(self, X_meta_enhanced, meta_labels, manager_params=None):
+    def train_manager(
+        self,
+        X_meta_enhanced: pd.DataFrame,
+        meta_labels: NDArray[np.integer],
+        manager_params: dict[str, int | float] | None = None,
+    ) -> xgb.XGBClassifier:
         if manager_params is None:
             params = dict(self.config.meta_model)
             params.pop('confidence_threshold', None)
@@ -114,7 +138,12 @@ class FoldTrainer:
         self.manager.fit(X_meta_enhanced, meta_labels)
         return self.manager
 
-    def run_fold(self, train_df, test_df, analyst_config=None):
+    def run_fold(
+        self,
+        train_df: pd.DataFrame,
+        test_df: pd.DataFrame,
+        analyst_config: DictConfig | None = None,
+    ) -> dict[str, pd.Series | NDArray[np.floating] | pd.DatetimeIndex | pd.DataFrame]:
         data = self.prepare_fold_data(train_df, test_df)
 
         self.train_analyst(

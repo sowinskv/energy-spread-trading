@@ -1,9 +1,19 @@
+from __future__ import annotations
+
 import numpy as np
 import pandas as pd
-from typing import Any
+from numpy.typing import NDArray
+from omegaconf import DictConfig
 
 
-def calculate_dynamic_exits(positions, prices, timestamps, entry_prices, entry_times, config):
+def calculate_dynamic_exits(
+    positions: NDArray[np.floating],
+    prices: NDArray[np.floating],
+    timestamps: pd.Series,
+    entry_prices: NDArray[np.floating],
+    entry_times: pd.Series,
+    config: DictConfig,
+) -> NDArray[np.floating]:
     """Calculate position exits based on time-based rules"""
     exits = np.zeros_like(positions)
     current_pnl = (prices - entry_prices) * np.sign(positions)
@@ -34,7 +44,12 @@ def calculate_dynamic_exits(positions, prices, timestamps, entry_prices, entry_t
     return exits
 
 
-def consensus_exit_rules(current_positions, predictions_1h, predictions_4h, config):
+def consensus_exit_rules(
+    current_positions: NDArray[np.floating],
+    predictions_1h: NDArray[np.floating],
+    predictions_4h: NDArray[np.floating],
+    config: DictConfig,
+) -> NDArray[np.floating]:
     """More conservative consensus exit rules"""
     exits = np.zeros_like(current_positions)
     direction_1h = np.sign(predictions_1h)
@@ -55,7 +70,12 @@ def consensus_exit_rules(current_positions, predictions_1h, predictions_4h, conf
     return exits
 
 
-def confidence_based_position_sizing(meta_probs, base_position=1.0, min_confidence=0.5, max_multiplier=2.0):
+def confidence_based_position_sizing(
+    meta_probs: NDArray[np.floating],
+    base_position: float = 1.0,
+    min_confidence: float = 0.5,
+    max_multiplier: float = 2.0,
+) -> NDArray[np.floating]:
     """Calculate position sizes based on model confidence"""
     confidence_excess = np.maximum(0, meta_probs - min_confidence)
     confidence_normalized = confidence_excess / (1 - min_confidence)
@@ -66,7 +86,7 @@ def confidence_based_position_sizing(meta_probs, base_position=1.0, min_confiden
     return np.clip(positions, 0.1, max_multiplier * base_position)
 
 
-def detect_market_volatility_regime(returns, window=72):
+def detect_market_volatility_regime(returns: pd.Series, window: int = 72) -> str:
     """Detect current market volatility regime"""
     if len(returns) < window:
         return 'normal'
@@ -84,7 +104,11 @@ def detect_market_volatility_regime(returns, window=72):
         return 'normal'
 
 
-def multi_horizon_consensus(predictions_1h, predictions_4h, consensus_threshold=0.75):
+def multi_horizon_consensus(
+    predictions_1h: NDArray[np.floating],
+    predictions_4h: NDArray[np.floating],
+    consensus_threshold: float = 0.75,
+) -> NDArray[np.bool_]:
     """Check for multi-horizon prediction consensus"""
     direction_1h = np.sign(predictions_1h)
     direction_4h = np.sign(predictions_4h)
@@ -97,7 +121,9 @@ def multi_horizon_consensus(predictions_1h, predictions_4h, consensus_threshold=
     return agreement & strong_consensus
 
 
-def optimal_trading_hours(timestamp_index):
+def optimal_trading_hours(
+    timestamp_index: pd.DatetimeIndex,
+) -> tuple[NDArray[np.bool_], NDArray[np.bool_]]:
     """Determine optimal trading hours based on timestamp"""
     hours = timestamp_index.hour
     weekday = timestamp_index.dayofweek

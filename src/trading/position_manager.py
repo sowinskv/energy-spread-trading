@@ -1,10 +1,13 @@
+from __future__ import annotations
+
 from typing import List, Dict, Any
+from omegaconf import DictConfig
 
 
 class TrailingStopManager:
     """Manages trailing stop losses for active positions"""
     
-    def __init__(self, config):
+    def __init__(self, config: DictConfig) -> None:
         self.initial_stop_pct = config.exit_rules.trailing_stop.initial_stop
         self.trail_pct = config.exit_rules.trailing_stop.trail_amount
         self.highest_profits = {}
