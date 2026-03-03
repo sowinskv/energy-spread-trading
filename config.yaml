@@ -70,23 +70,6 @@ model_params:
   ridge:
     alpha: 35.1645
 
-exit_rules:
-  enable: false
-  max_concurrent_positions: 5
-  trailing_stop:
-    enable: false
-    initial_stop: 8.0
-    trail_amount: 3.0
-  time_based:
-    profit_take_hours: 48
-    profit_take_threshold: 2.0
-    max_hold_hours: 168
-    initial_stop_loss: -8.0
-    stop_loss_decay: -0.02
-  position_management:
-    enable_consensus_exits: false
-    confidence_exit_threshold: 0.1
-
 trading:
   position_size_mwh: 1
   max_position: 2.0
