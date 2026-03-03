@@ -46,7 +46,6 @@ class TestValidateConfig:
                 },
                 "cv": {"train_days": 180, "test_days": 30, "purge_days": 7, "n_splits": 3},
                 "model": {"n_estimators": 100},
-                "meta_model": {"confidence_threshold": 0.5},
             }
         )
         validate_config(cfg)

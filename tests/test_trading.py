@@ -17,7 +17,6 @@ from src.trading.metrics import asymmetric_trading_loss, calculate_enhanced_meta
 def base_config():
     return OmegaConf.create(
         {
-            "meta_model": {"confidence_threshold": 0.5},
             "trading": {"cost_per_mwh": 0.5, "position_size_mwh": 1.0, "currency": "EUR"},
             "exit_rules": {
                 "enable": False,

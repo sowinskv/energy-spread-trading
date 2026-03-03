@@ -65,16 +65,6 @@ def objective(trial, config, df, bool_cols, numeric_cols, splits):
         "multi_horizon": False,
     }
 
-    # --- meta-model (regularized) ---
-    manager_params = {
-        "n_estimators": trial.suggest_int("manager_n_estimators", 30, 150, step=10),
-        "max_depth": trial.suggest_int("manager_max_depth", 2, 4),
-        "learning_rate": trial.suggest_float("manager_lr", 0.01, 0.1, log=True),
-        "random_state": 42,
-    }
-
-    confidence_threshold = trial.suggest_float("confidence_threshold", 0.40, 0.65)
-
     # --- cross-validation ---
     fold_pnls = []
     fold_hit_rates = []
@@ -100,25 +90,20 @@ def objective(trial, config, df, bool_cols, numeric_cols, splits):
             }
         )
         trainer.train_analyst(
-            data["X_prim"], data["y_prim"], data["primary_df"].index, analyst_config=temp_config, verbose=False
+            data["X_train"], data["y_train"], train_df.index, analyst_config=temp_config, verbose=False
         )
 
-        meta_analyst_preds = trainer.predict_analyst(data["X_meta"], data["meta_df"].index)
-        meta_labels = trainer.create_meta_labels(meta_analyst_preds, data["y_meta"])
-
-        X_meta_enhanced = trainer.enhance_features(data["X_meta"], meta_analyst_preds, pred_col="analyst_pred")
-        trainer.train_manager(X_meta_enhanced, meta_labels, manager_params=manager_params)
-
-        test_analyst_preds = trainer.predict_analyst(data["X_test"], test_df.index)
-        X_test_enhanced = trainer.enhance_features(data["X_test"], test_analyst_preds, pred_col="analyst_pred")
-        test_manager_probs = trainer.manager.predict_proba(X_test_enhanced)[:, 1]
+        test_preds = trainer.predict_analyst(data["X_test"], test_df.index)
 
         try:
-            temp_config_full = OmegaConf.create(OmegaConf.to_yaml(config))
-            temp_config_full.meta_model.confidence_threshold = confidence_threshold
-
+            # trade every signal, no gating
+            dummy_probs = np.ones(len(data["y_test"]))
             metrics = calculate_enhanced_meta_trading_metrics_with_exits(
-                data["y_test"], test_analyst_preds, test_manager_probs, temp_config_full, use_exit_rules=False
+                data["y_test"], test_preds, dummy_probs, config,
+                confidence_threshold=0.0,
+                use_dynamic_thresholds=False,
+                use_confidence_sizing=False,
+                use_exit_rules=False,
             )
             pnl = metrics["total_pnl"] if not np.isnan(metrics["total_pnl"]) else 0
             hit_rate = metrics["hit_rate"] if not np.isnan(metrics["hit_rate"]) else 0

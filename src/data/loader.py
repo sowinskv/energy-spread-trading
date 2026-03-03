@@ -51,7 +51,6 @@ def validate_config(config: DictConfig) -> None:
         "cv.purge_days",
         "cv.n_splits",
         "model",
-        "meta_model.confidence_threshold",
     ]
     from omegaconf import OmegaConf
 

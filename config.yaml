@@ -19,7 +19,6 @@ data:
 cv:
   initial_train_days: 270
   train_days: 180
-  meta_train_days: 60
   test_days: 30
   purge_days: 7
   embargo_days: 2
@@ -33,13 +32,6 @@ model:
   colsample_bytree: 0.5505
   min_child_weight: 25
   random_state: 42
-
-meta_model:
-  n_estimators: 60
-  max_depth: 3
-  learning_rate: 0.0686
-  random_state: 42
-  confidence_threshold: 0.5975
 
 ensemble:
   enable: true
