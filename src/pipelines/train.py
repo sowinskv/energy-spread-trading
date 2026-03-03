@@ -7,7 +7,7 @@ from omegaconf import OmegaConf
 from src.data.loader import get_expanding_walk_forward_splits, prepare_dataset
 from src.ml.trainer import FoldTrainer
 from src.trading.metrics import calculate_enhanced_meta_trading_metrics_with_exits
-from src.ui.display import backtest_summary, fold_header, fold_results, status
+from src.ui.display import backtest_summary, fold_header, fold_results, header, status
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +22,7 @@ def main():
     mlflow.set_experiment(config.mlflow.experiment_name)
 
     with mlflow.start_run(run_name="xgboost_meta_labeling"):
+        header("ENERGY")
         df, bool_cols, numeric_cols = prepare_dataset(config)
 
         splits = get_expanding_walk_forward_splits(

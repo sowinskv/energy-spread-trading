@@ -178,11 +178,17 @@ if __name__ == "__main__":
         format="%(message)s",
     )
 
+    from src.ui.display import _heading, _kv, _rule, header, status
+
+    header("ENERGY")
+
     config, df, bool_cols, numeric_cols, splits = _load_data()
 
-    logger.info("running optuna optimization for maximum hit rate...")
-    logger.info("targeting high-performing models: XGBoost, Random Forest, Extra Trees (89%% of ensemble)")
+    _heading("00", "OPTIMIZE", "optuna / hit rate maximization")
+    status("xgboost + random forest + extra trees + ridge")
+    status("100 trials / purged walk-forward cv")
 
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
     study = optuna.create_study(
         study_name="energy_hit_rate_optimization",
         storage="sqlite:///optuna_study.db",
@@ -194,17 +200,18 @@ if __name__ == "__main__":
         n_trials=100,
     )
 
-    results = [
-        "\n" + "=" * 50,
-        "optimization complete. best results:",
-        f"best cv hit rate: {study.best_value:.1f}%",
-        "\noptimal parameters:",
-    ]
+    _rule('"RESULTS"')
+    from src.ui.display import console
+
+    console.print()
+    _kv("best cv hit rate", f"{study.best_value:.1f}%", bold_value=True)
+    console.print()
+
+    _heading("01", "OPTIMAL PARAMETERS")
     for key, value in study.best_params.items():
         if isinstance(value, float):
-            results.append(f"  {key}: {value:.4f}")
+            _kv(key, f"{value:.4f}")
         else:
-            results.append(f"  {key}: {value}")
-    results.append("=" * 50)
-    results.append("update your config.yaml with these parameters.")
-    logger.info("\n".join(results))
+            _kv(key, str(value))
+    console.print()
+    _rule()

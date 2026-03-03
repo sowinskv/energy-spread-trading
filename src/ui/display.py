@@ -1,40 +1,63 @@
 from __future__ import annotations
 
 from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table, box
 from rich.text import Text
 
-console = Console()
+console = Console(highlight=False)
 
-ACCENT = "bright_cyan"
-DIM = "dim"
-BOLD = "bold"
-METRIC_STYLE = "bold white"
-HEADER_STYLE = "bold"
+W = 56
+RULE_CHAR = "─"
+INDENT = "      "
 
 
-def header(title: str, subtitle: str | None = None) -> None:
-    t = Text(title, style=HEADER_STYLE)
-    if subtitle:
-        t.append(f"\n{subtitle}", style=DIM)
+def _rule(title: str | None = None) -> None:
+    if title:
+        label = f" {title} "
+        pad = W - len(label)
+        left = pad // 2
+        right = pad - left
+        line = RULE_CHAR * left + label + RULE_CHAR * right
+    else:
+        line = RULE_CHAR * W
+    console.print(Text(line, style="dim"))
+
+
+def _heading(number: str, title: str, meta: str | None = None) -> None:
     console.print()
-    console.print(Panel(t, border_style=DIM, padding=(0, 2), expand=False))
-
-
-def entry(term: str, definition: str) -> None:
     t = Text()
-    t.append(term, style=BOLD)
-    t.append(f"  {definition}", style=DIM)
+    t.append(number, style="dim")
+    t.append("    ", style="")
+    t.append(f'"{title}"', style="bold")
+    if meta:
+        t.append(f"    {meta}", style="dim")
+    console.print(t)
+    console.print()
+
+
+def _kv(label: str, value: str, bold_value: bool = False) -> None:
+    val_style = "bold" if bold_value else ""
+    t = Text()
+    t.append(f"{INDENT}{label:<22}", style="dim")
+    t.append(value, style=val_style)
     console.print(t)
 
 
+def header(title: str, subtitle: str | None = None) -> None:
+    _rule(title.upper())
+    if subtitle:
+        console.print(Text(f"{INDENT}{subtitle}", style="dim"))
+
+
+def entry(term: str, definition: str) -> None:
+    _kv(term, definition)
+
+
 def fold_header(fold: int, train_size: int, test_size: int) -> None:
-    t = Text()
-    t.append(f"Fold {fold}", style=HEADER_STYLE)
-    t.append(f"   {train_size:,} train · {test_size:,} test samples", style=DIM)
-    console.print()
-    console.print(Panel(t, border_style=DIM, padding=(0, 2), expand=False))
+    _heading(
+        f"{fold:02d}",
+        f"FOLD {fold}",
+        f"{train_size:,} train / {test_size:,} test",
+    )
 
 
 def horizon_table(
@@ -44,36 +67,30 @@ def horizon_table(
     n_horizons: int,
     n_samples: int,
 ) -> None:
-    table = Table(
-        box=box.SIMPLE_HEAD,
-        show_edge=False,
-        padding=(0, 2),
-        title=f"[{DIM}]{n_samples:,} samples[/]",
-        title_style=DIM,
-    )
-    table.add_column("horizon", style=DIM)
-    table.add_column("r²", justify="right")
-    table.add_column("mse", justify="right", style=DIM)
-    table.add_column("weight", justify="right", style=DIM)
+    console.print(Text(f"{INDENT}{n_samples:,} samples", style="dim"))
+    console.print()
+
+    hdr = Text()
+    hdr.append(f"{INDENT}{'horizon':<12}{'r²':<10}{'mse':<12}{'weight':<10}", style="dim")
+    console.print(hdr)
+    console.print(Text(f"{INDENT}{RULE_CHAR * 42}", style="dim"))
 
     for h in horizon_data:
-        r2_text = f"[{ACCENT}]{h['r2']:.3f}[/]" if h["r2"] > 0.95 else f"{h['r2']:.3f}"
-        table.add_row(
-            h["label"],
-            r2_text,
-            f"{h['mse']:.4f}",
-            f"{h['weight']:.3f}",
-        )
+        t = Text()
+        t.append(f"{INDENT}{h['label']:<12}", style="dim")
+        t.append(f"{h['r2']:<10.3f}", style="bold" if h["r2"] > 0.95 else "")
+        t.append(f"{h['mse']:<12.4f}", style="dim")
+        t.append(f"{h['weight']:<10.3f}", style="dim")
+        console.print(t)
 
-    table.add_section()
-    table.add_row(
-        f"[{BOLD}]ensemble[/]",
-        f"[{METRIC_STYLE}]{ensemble_r2:.3f}[/]",
-        f"{ensemble_mse:.4f}",
-        "1.000",
-    )
-
-    console.print(table)
+    console.print(Text(f"{INDENT}{RULE_CHAR * 42}", style="dim"))
+    t = Text()
+    t.append(f"{INDENT}{'ensemble':<12}", style="bold")
+    t.append(f"{ensemble_r2:<10.3f}", style="bold")
+    t.append(f"{ensemble_mse:<12.4f}", style="dim")
+    t.append(f"{'1.000':<10}", style="dim")
+    console.print(t)
+    console.print()
 
 
 def model_table(
@@ -81,59 +98,42 @@ def model_table(
     ensemble_r2: float,
     ensemble_mse: float,
 ) -> None:
-    table = Table(
-        box=box.SIMPLE_HEAD,
-        show_edge=False,
-        padding=(0, 2),
-    )
-    table.add_column("model", style=DIM)
-    table.add_column("r²", justify="right")
-    table.add_column("mse", justify="right", style=DIM)
-    table.add_column("weight", justify="right", style=DIM)
+    hdr = Text()
+    hdr.append(f"{INDENT}{'model':<16}{'r²':<10}{'mse':<12}{'weight':<10}", style="dim")
+    console.print(hdr)
+    console.print(Text(f"{INDENT}{RULE_CHAR * 46}", style="dim"))
 
     for m in model_data:
-        r2_text = f"[{ACCENT}]{m['r2']:.3f}[/]" if m["r2"] > 0.95 else f"{m['r2']:.3f}"
-        table.add_row(
-            m["name"],
-            r2_text,
-            f"{m['mse']:.4f}",
-            f"{m['weight']:.3f}",
-        )
+        t = Text()
+        t.append(f"{INDENT}{m['name']:<16}", style="dim")
+        t.append(f"{m['r2']:<10.3f}", style="bold" if m["r2"] > 0.95 else "")
+        t.append(f"{m['mse']:<12.4f}", style="dim")
+        t.append(f"{m['weight']:<10.3f}", style="dim")
+        console.print(t)
 
-    table.add_section()
-    table.add_row(
-        f"[{BOLD}]ensemble[/]",
-        f"[{METRIC_STYLE}]{ensemble_r2:.3f}[/]",
-        f"{ensemble_mse:.4f}",
-        "1.000",
-    )
-
-    console.print(table)
+    console.print(Text(f"{INDENT}{RULE_CHAR * 46}", style="dim"))
+    t = Text()
+    t.append(f"{INDENT}{'ensemble':<16}", style="bold")
+    t.append(f"{ensemble_r2:<10.3f}", style="bold")
+    t.append(f"{ensemble_mse:<12.4f}", style="dim")
+    t.append(f"{'1.000':<10}", style="dim")
+    console.print(t)
+    console.print()
 
 
 def fold_results(metrics: dict, metrics_no_exits: dict, currency: str) -> None:
-    table = Table(
-        box=box.SIMPLE_HEAD,
-        show_edge=False,
-        padding=(0, 2),
-    )
-    table.add_column("", style=DIM)
-    table.add_column("", justify="right")
-
+    console.print()
     pnl = metrics["total_pnl"]
-    pnl_style = "green" if pnl > 0 else "red"
-    pnl_no_exit = metrics_no_exits["total_pnl"]
-    pnl_ne_style = "green" if pnl_no_exit > 0 else "red"
+    pnl_ne = metrics_no_exits["total_pnl"]
 
-    table.add_row("pnl (exits)", f"[{pnl_style}]{currency} {pnl:>8.2f}[/]")
-    table.add_row("pnl (no exits)", f"[{pnl_ne_style}]{currency} {pnl_no_exit:>8.2f}[/]")
-    table.add_row("hit rate", f"[{METRIC_STYLE}]{metrics['hit_rate']:>7.1f}%[/]")
-    table.add_row("trades", f"{metrics['total_trades']:>8}")
-    table.add_row("sharpe", f"[{ACCENT}]{metrics['sharpe_ratio']:>8.2f}[/]")
-    table.add_row("sortino", f"{metrics['sortino_ratio']:>8.2f}")
-    table.add_row("drawdown", f"[red]{currency} {metrics['max_drawdown']:>8.2f}[/]")
-
-    console.print(table)
+    _kv("pnl", f"{currency} {pnl:>10.2f}", bold_value=True)
+    _kv("pnl (no exits)", f"{currency} {pnl_ne:>10.2f}")
+    _kv("hit rate", f"{metrics['hit_rate']:>13.1f}%", bold_value=True)
+    _kv("trades", f"{metrics['total_trades']:>14}")
+    _kv("sharpe", f"{metrics['sharpe_ratio']:>14.2f}", bold_value=True)
+    _kv("sortino", f"{metrics['sortino_ratio']:>14.2f}")
+    _kv("max drawdown", f"{currency} {metrics['max_drawdown']:>10.2f}")
+    console.print()
 
 
 def backtest_summary(
@@ -150,46 +150,32 @@ def backtest_summary(
     n_folds: int,
 ) -> None:
     console.print()
+    _rule('"BACKTEST"')
+    console.print(Text(f"{INDENT}{n_folds} folds / expanding walk-forward", style="dim"))
+    console.print()
 
-    title = Text()
-    title.append("Backtest", style=HEADER_STYLE)
-    title.append(f"   {n_folds} expanding walk-forward folds", style=DIM)
+    _kv("pnl", f"{currency} {avg_pnl:>10.2f}", bold_value=True)
+    _kv("max drawdown", f"{currency} {avg_dd:>10.2f}")
+    _kv("sharpe", f"{avg_sharpe:>14.2f}", bold_value=True)
+    _kv("sortino", f"{avg_sortino:>14.2f}")
+    _kv("hit rate", f"{avg_hit_rate:>13.1f}%", bold_value=True)
+    _kv("consensus", f"{avg_consensus:>13.1%}")
+    _kv("hours traded", f"{avg_traded:>13.1f}%")
+    _kv("avg trades / fold", f"{avg_trades:>14.0f}")
+    _kv("avg position size", f"{avg_position:>14.2f}")
 
-    table = Table(
-        box=box.SIMPLE_HEAD,
-        show_edge=False,
-        padding=(0, 2),
-    )
-    table.add_column("", style=DIM)
-    table.add_column("", justify="right")
-
-    pnl_style = "green" if avg_pnl > 0 else "red"
-
-    table.add_row("pnl", f"[{pnl_style}]{currency} {avg_pnl:.2f}[/]")
-    table.add_row("max drawdown", f"[red]{currency} {avg_dd:.2f}[/]")
-    table.add_row("sharpe", f"[{ACCENT}]{avg_sharpe:.2f}[/]")
-    table.add_row("sortino", f"{avg_sortino:.2f}")
-    table.add_row("hit rate", f"[{METRIC_STYLE}]{avg_hit_rate:.1f}%[/]")
-    table.add_row("consensus", f"{avg_consensus:.1%}")
-    table.add_row("hours traded", f"{avg_traded:.1f}%")
-    table.add_row("avg trades / fold", f"{avg_trades:.0f}")
-    table.add_row("avg position size", f"{avg_position:.2f}")
-
-    console.print(Panel(table, title=title, title_align="left", border_style=DIM, padding=(0, 1)))
+    console.print()
+    _rule()
     console.print()
 
 
-def status(message: str, style: str = DIM) -> None:
-    console.print(f"  [{style}]{message}[/]")
+def status(message: str, style: str = "dim") -> None:
+    console.print(Text(f"      > {message}", style=style))
 
 
 def data_loaded(filepath: str, n_rows: int, n_cols: int) -> None:
-    t = Text()
-    t.append("Data", style=HEADER_STYLE)
-    t.append(f"   {n_rows:,} rows · {n_cols} features", style=DIM)
-    t.append(f"\n  {filepath}", style=DIM)
-    console.print(Panel(t, border_style=DIM, padding=(0, 2), expand=False))
+    _heading("00", "DATA", f"{n_rows:,} rows / {n_cols} features / {filepath}")
 
 
 def warning(message: str) -> None:
-    console.print(f"  [yellow dim]⚠ {message}[/]")
+    console.print(Text(f"      ! {message}", style="dim"))
