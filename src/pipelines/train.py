@@ -68,6 +68,7 @@ def main():
         cost = config.trading.cost_per_mwh
         max_pos = config.trading.get("max_position", 2.0)
         min_conv = config.trading.get("min_conviction", 0.0)
+        skip_hrs = tuple(config.trading.get("skip_hours", []))
 
         for fold, (train_idx, test_idx) in enumerate(splits, 1):
             train_df = df.iloc[train_idx]
@@ -88,6 +89,8 @@ def main():
                 cost_per_mwh=cost,
                 max_position=max_pos,
                 min_conviction=min_conv,
+                timestamps=test_df.index,
+                skip_hours=skip_hrs,
             )
 
             fold_pnls.append(metrics["total_pnl"])

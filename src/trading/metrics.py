@@ -12,11 +12,14 @@ def calculate_conviction_metrics(
     max_position: float = 2.0,
     vol_lookback: int = 168,
     min_conviction: float = 0.0,
+    timestamps: pd.DatetimeIndex | None = None,
+    skip_hours: tuple[int, ...] = (),
 ) -> dict[str, float | int | NDArray]:
     """Conviction-based trading metrics — no binary gate, continuous sizing.
 
     Position size = clip(|pred| / rolling_std(pred), 0, max_position).
     Predictions with conviction < min_conviction are skipped (size=0).
+    Hours in skip_hours are zeroed out (no trade).
     PnL per hour = sign(pred) * size * actual_spread - cost * size.
     """
     y = np.asarray(y_true, dtype=float)
@@ -35,6 +38,12 @@ def calculate_conviction_metrics(
     # skip low-conviction predictions — adaptive to prediction volatility regime
     low_conviction = conviction < min_conviction
     position_sizes[low_conviction] = 0.0
+
+    # skip hours with poor directional accuracy (e.g. overnight)
+    if timestamps is not None and skip_hours:
+        hours = timestamps.hour if hasattr(timestamps, 'hour') else pd.DatetimeIndex(timestamps).hour
+        skip_mask = np.isin(hours, skip_hours)
+        position_sizes[skip_mask] = 0.0
 
     # direction from sign of prediction
     direction = np.sign(preds)

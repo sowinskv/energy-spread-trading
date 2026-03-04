@@ -75,6 +75,7 @@ trading:
   max_position: 2.0
   cost_per_mwh: 0.5
   min_conviction: 0.8
+  skip_hours: [0, 1, 2, 3, 4, 5]
   currency: "EUR"
 
 mlflow:
