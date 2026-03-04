@@ -67,6 +67,7 @@ def main():
 
         cost = config.trading.cost_per_mwh
         max_pos = config.trading.get("max_position", 2.0)
+        min_pred = config.trading.get("min_prediction_threshold", 0.0)
 
         for fold, (train_idx, test_idx) in enumerate(splits, 1):
             train_df = df.iloc[train_idx]
@@ -86,6 +87,7 @@ def main():
                 test_preds,
                 cost_per_mwh=cost,
                 max_position=max_pos,
+                min_prediction_threshold=min_pred,
             )
 
             fold_pnls.append(metrics["total_pnl"])
