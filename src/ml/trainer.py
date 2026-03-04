@@ -32,7 +32,13 @@ class FoldTrainer:
         )
         return self.preprocessor
 
-    def prepare_fold_data(self, train_df: pd.DataFrame, test_df: pd.DataFrame) -> dict[str, pd.DataFrame | pd.Series]:
+    def prepare_fold_data(
+        self,
+        train_df: pd.DataFrame,
+        test_df: pd.DataFrame,
+        drop_cols: list[str] | None = None,
+        add_back_cols: list[str] | None = None,
+    ) -> dict[str, pd.DataFrame | pd.Series]:
         self.create_preprocessor()
         leakage_cols = self.config.data.leakage_cols
 
@@ -41,6 +47,25 @@ class FoldTrainer:
 
         X_test = self.preprocessor.transform(test_df.drop(columns=leakage_cols))
         y_test = test_df[self.config.data.target_col]
+
+        # ablation: add back columns that were dropped (e.g. raw integers)
+        if add_back_cols:
+            for col in add_back_cols:
+                if col == "hour":
+                    X_train[col] = X_train.index.hour
+                    X_test[col] = X_test.index.hour
+                elif col == "month":
+                    X_train[col] = X_train.index.month
+                    X_test[col] = X_test.index.month
+                elif col == "day_of_week":
+                    X_train[col] = X_train.index.dayofweek
+                    X_test[col] = X_test.index.dayofweek
+
+        # ablation: drop specific feature columns
+        if drop_cols:
+            existing = [c for c in drop_cols if c in X_train.columns]
+            X_train = X_train.drop(columns=existing)
+            X_test = X_test.drop(columns=existing)
 
         return {
             "X_train": X_train,
@@ -88,8 +113,10 @@ class FoldTrainer:
         train_df: pd.DataFrame,
         test_df: pd.DataFrame,
         analyst_config: DictConfig | None = None,
+        drop_cols: list[str] | None = None,
+        add_back_cols: list[str] | None = None,
     ) -> dict[str, pd.Series | NDArray[np.floating] | pd.DatetimeIndex | dict]:
-        data = self.prepare_fold_data(train_df, test_df)
+        data = self.prepare_fold_data(train_df, test_df, drop_cols=drop_cols, add_back_cols=add_back_cols)
 
         self.train_analyst(
             data["X_train"],
