@@ -1,12 +1,22 @@
 # Energy
 
-A spread forecasting and trading pipeline for the Polish energy market. Predicts the SDAC–IDA1 price spread using a multi-horizon ensemble of tree-based models, then filters trades through a meta-labeling layer that decides _whether_ to act on each prediction.
+A spread forecasting and trading pipeline for the Polish energy market.
+
+Predicts the SDAC–IDA1 price spread using a two-stage ensemble approach: a regressor estimates spread magnitude while a classifier predicts direction. Trades are filtered through conviction-based sizing that only acts when confidence is high enough.
 
 ## How it works
 
-The system has two stages. First, an ensemble of XGBoost, Random Forest, Extra Trees and Ridge regression models forecasts the spread across multiple time horizons (1h, 4h, 12h, 24h). Their predictions are blended with adaptive, performance-based weights. Second, a meta-model (XGBoost classifier) learns which predictions are actually worth trading — a concept borrowed from de Prado's meta-labeling. Only trades where the meta-model is confident enough get executed.
+2 stages:
 
-Walk-forward cross-validation with purge gaps prevents lookahead bias. MLflow tracks every experiment.
+"1"
+An ensemble of XGBoost, Random Forest, Extra Trees and Ridge regression models forecasts the spread magnitude. Their predictions are blended with adaptive, performance-based weights.
+
+"2"
+A classification ensemble (XGBoost, Random Forest, Extra Trees, Logistic Regression) predicts the probability that the spread is positive. The final prediction combines both: 
+
+`(2 × P(up) − 1) × |regression prediction|`.
+
+Trades are sized by conviction — the ratio of prediction magnitude to recent prediction volatility. Low-conviction hours (0–5) are skipped entirely. Walk-forward cross-validation with purge gaps and embargo periods prevents lookahead bias. MLflow tracks every experiment.
 
 ## Structure
 
@@ -15,7 +25,8 @@ src/
 ├── data/          data loading, validation, CV splits
 ├── ml/            ensemble models, feature engineering, fold trainer
 ├── pipelines/     training and hyperparameter optimization entrypoints
-└── trading/       metrics, exit strategies, position management
+├── trading/       conviction-based metrics, position sizing
+└── ui/            terminal display formatting
 ```
 
 ## Usage
@@ -23,27 +34,24 @@ src/
 ```bash
 make train          # run the training pipeline
 make optimize       # run optuna hyperparameter search
-make test           # run the test suite (30 tests)
-make check          # lint + test
+make test           # run the test suite
+make lint           # lint with ruff
 make format         # auto-format with ruff
+make check          # lint + test
+make clean          # remove __pycache__ and .pytest_cache
 ```
 
 Everything is configured through `config.yaml`. MLflow UI: `uv run mlflow ui`.
 
 ## Current performance
 
-Backtest across 3 expanding walk-forward folds:
+Backtest across 4 expanding walk-forward folds:
 
-| Metric       | Value       |
-| ------------ | ----------- |
-| PnL          | EUR 1783.24 |
-| Sharpe       | 14.00       |
-| Sortino      | 38.54       |
-| Hit Rate     | 71.5%       |
-| Hours Traded | 13.8%       |
-
-Exit rules exist but are disabled — the current version needs work.
-
-## What's next
-
-Feature selection, more data sources, making exit rules not terrible.
+| Metric       | Value     |
+| ------------ | --------- |
+| PnL          | EUR 1,770 |
+| Sharpe       | 20.35     |
+| Sortino      | 28.58     |
+| Hit Rate     | 72.1%     |
+| Max Drawdown | EUR −164  |
+| Hours Traded | 27.8%     |
