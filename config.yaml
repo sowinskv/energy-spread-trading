@@ -25,56 +25,57 @@ cv:
   n_splits: 4
 
 model:
-  n_estimators: 80
-  max_depth: 4
-  learning_rate: 0.0812
-  subsample: 0.6728
-  colsample_bytree: 0.6304
-  min_child_weight: 35
+  n_estimators: 100
+  max_depth: 2
+  learning_rate: 0.0280
+  subsample: 0.6120
+  colsample_bytree: 0.8699
+  min_child_weight: 46
   random_state: 42
 
 ensemble:
   enable: true
+  two_stage: true
   models:
     - "xgboost"
     - "random_forest"
     - "extra_trees"
     - "ridge"
   reweight_frequency: 720
-  performance_window: 168
+  performance_window: 336
   multi_horizon: false
 
 model_params:
   xgboost:
-    n_estimators: 80
-    max_depth: 4
-    learning_rate: 0.0812
-    subsample: 0.6728
-    colsample_bytree: 0.6304
-    min_child_weight: 35
+    n_estimators: 100
+    max_depth: 2
+    learning_rate: 0.0280
+    subsample: 0.6120
+    colsample_bytree: 0.8699
+    min_child_weight: 46
 
   random_forest:
-    n_estimators: 250
+    n_estimators: 300
     max_depth: 7
-    min_samples_split: 39
-    min_samples_leaf: 18
-    max_features: 0.5
+    min_samples_split: 29
+    min_samples_leaf: 8
+    max_features: 0.7
 
   extra_trees:
     n_estimators: 150
-    max_depth: 3
-    min_samples_split: 23
-    min_samples_leaf: 5
-    max_features: 0.5
+    max_depth: 4
+    min_samples_split: 19
+    min_samples_leaf: 15
+    max_features: "log2"
 
   ridge:
-    alpha: 0.5006
+    alpha: 0.1680
 
 trading:
   position_size_mwh: 1
   max_position: 2.0
   cost_per_mwh: 0.5
-  min_conviction: 0.8
+  min_conviction: 0.6
   skip_hours: [0, 1, 2, 3, 4, 5]
   currency: "EUR"
 

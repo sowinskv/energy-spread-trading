@@ -56,6 +56,9 @@ def objective(trial, config, df, bool_cols, numeric_cols, splits):
 
     ridge_alpha = trial.suggest_float("ridge_alpha", 0.1, 50.0, log=True)
 
+    # --- trading ---
+    min_conviction = trial.suggest_float("min_conviction", 0.3, 1.2, step=0.1)
+
     # --- fixed architecture: ensemble, no multi-horizon ---
     ensemble_params = {
         "enable": True,
@@ -93,14 +96,21 @@ def objective(trial, config, df, bool_cols, numeric_cols, splits):
             data["X_train"], data["y_train"], train_df.index, analyst_config=temp_config, verbose=False
         )
 
-        test_preds = trainer.predict_analyst(data["X_test"], test_df.index)
+        # two-stage: train classifier for directional accuracy
+        two_stage = config.ensemble.get("two_stage", False)
+        if two_stage:
+            trainer.train_classifier(
+                data["X_train"], data["y_train"], analyst_config=temp_config, verbose=False
+            )
+
+        test_preds = trainer.predict_final(data["X_test"], test_df.index)
 
         try:
             metrics = calculate_conviction_metrics(
                 data["y_test"], test_preds,
                 cost_per_mwh=config.trading.cost_per_mwh,
                 max_position=config.trading.get("max_position", 2.0),
-                min_conviction=config.trading.get("min_conviction", 0.0),
+                min_conviction=min_conviction,
                 timestamps=test_df.index,
                 skip_hours=tuple(config.trading.get("skip_hours", [])),
             )
@@ -182,7 +192,7 @@ if __name__ == "__main__":
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     study = optuna.create_study(
-        study_name="energy_v3_regularized",
+        study_name="energy_v4_two_stage",
         storage="sqlite:///optuna_study.db",
         load_if_exists=True,
         direction="maximize",

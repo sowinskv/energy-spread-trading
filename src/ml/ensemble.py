@@ -10,8 +10,8 @@ import pandas as pd
 import xgboost as xgb
 from numpy.typing import NDArray
 from omegaconf import DictConfig
-from sklearn.ensemble import ExtraTreesRegressor, RandomForestRegressor
-from sklearn.linear_model import Ridge
+from sklearn.ensemble import ExtraTreesClassifier, ExtraTreesRegressor, RandomForestClassifier, RandomForestRegressor
+from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.preprocessing import StandardScaler
 
 logger = logging.getLogger(__name__)
@@ -234,6 +234,166 @@ class EnsembleAnalyst:
             raise FileNotFoundError(f"ensemble file not found: {filepath}") from None
         except (pickle.UnpicklingError, EOFError) as e:
             raise ValueError(f"corrupted ensemble file '{filepath}': {e}") from e
+
+
+class EnsembleClassifier:
+    """Classification ensemble for directional prediction (P(spread > 0)).
+
+    Mirrors EnsembleAnalyst structure but uses classifiers.
+    Output is calibrated probability, used as conviction signal.
+    """
+
+    def __init__(self, config: DictConfig) -> None:
+        self.config = config
+        self.models: dict = {}
+        self.weights: dict[str, float] | None = None
+        self.scaler = StandardScaler()
+        self._init_models()
+
+    def _init_models(self) -> None:
+        for model_name in self.config.ensemble.models:
+            if model_name == "xgboost":
+                self.models["xgboost"] = xgb.XGBClassifier(
+                    n_estimators=self.config.model_params.xgboost.n_estimators,
+                    max_depth=self.config.model_params.xgboost.max_depth,
+                    learning_rate=self.config.model_params.xgboost.learning_rate,
+                    subsample=self.config.model_params.xgboost.subsample,
+                    colsample_bytree=self.config.model_params.xgboost.colsample_bytree,
+                    min_child_weight=self.config.model_params.xgboost.get("min_child_weight", 1),
+                    random_state=42,
+                    objective="binary:logistic",
+                    eval_metric="logloss",
+                )
+
+            elif model_name == "random_forest":
+                self.models["random_forest"] = RandomForestClassifier(
+                    n_estimators=self.config.model_params.random_forest.n_estimators,
+                    max_depth=self.config.model_params.random_forest.max_depth,
+                    min_samples_split=self.config.model_params.random_forest.min_samples_split,
+                    min_samples_leaf=self.config.model_params.random_forest.min_samples_leaf,
+                    max_features=self.config.model_params.random_forest.max_features,
+                    random_state=44,
+                    n_jobs=-1,
+                )
+
+            elif model_name == "extra_trees":
+                self.models["extra_trees"] = ExtraTreesClassifier(
+                    n_estimators=self.config.model_params.extra_trees.n_estimators,
+                    max_depth=self.config.model_params.extra_trees.max_depth,
+                    min_samples_split=self.config.model_params.extra_trees.min_samples_split,
+                    min_samples_leaf=self.config.model_params.extra_trees.min_samples_leaf,
+                    max_features=self.config.model_params.extra_trees.max_features,
+                    random_state=47,
+                    n_jobs=-1,
+                )
+
+            elif model_name == "ridge":
+                # logistic regression with C = 1/alpha (inverse regularization)
+                alpha = self.config.model_params.ridge.alpha
+                self.models["logistic"] = LogisticRegression(
+                    C=1.0 / max(alpha, 1e-6),
+                    random_state=45,
+                    max_iter=1000,
+                )
+
+    def fit(self, X: pd.DataFrame, y: pd.Series, *, verbose: bool = True) -> EnsembleClassifier:
+        y_binary = (y > 0).astype(int)
+        X_scaled = self.scaler.fit_transform(X)
+
+        individual_probs: dict[str, NDArray[np.floating]] = {}
+        model_performance: dict[str, dict] = {}
+
+        for name, model in list(self.models.items()):
+            try:
+                if name in ("logistic",):
+                    model.fit(X_scaled, y_binary)
+                    individual_probs[name] = model.predict_proba(X_scaled)[:, 1]
+                else:
+                    model.fit(X, y_binary)
+                    individual_probs[name] = model.predict_proba(X)[:, 1]
+
+                prob = individual_probs[name]
+                accuracy = float(np.mean((prob > 0.5) == (y_binary == 1)))
+                log_loss_val = float(
+                    -np.mean(y_binary * np.log(prob + 1e-10) + (1 - y_binary) * np.log(1 - prob + 1e-10))
+                )
+                model_performance[name] = {"accuracy": accuracy, "log_loss": log_loss_val}
+
+            except Exception as e:
+                logger.error("classifier %s failed: %s", name, e)
+                del self.models[name]
+
+        if individual_probs:
+            self.weights = self._calculate_weights(y_binary, individual_probs)
+
+        if verbose:
+            from src.ui.display import model_table
+
+            model_data = []
+            ensemble_acc = 0.0
+
+            for name in sorted(model_performance.keys()):
+                perf = model_performance[name]
+                weight = self.weights.get(name, 0) if self.weights else 1 / len(model_performance)
+                model_data.append({"name": name, "r2": perf["accuracy"], "mse": perf["log_loss"], "weight": weight})
+                ensemble_acc += weight * perf["accuracy"]
+
+            # display: "r²" column shows accuracy, "mse" column shows log_loss
+            model_table(model_data, ensemble_acc, 0)
+
+        return self
+
+    def _calculate_weights(
+        self, y_binary: NDArray, probs: dict[str, NDArray[np.floating]]
+    ) -> dict[str, float]:
+        recent_size = max(100, int(len(y_binary) * 0.3))
+        y_recent = y_binary[-recent_size:]
+
+        scores: dict[str, float] = {}
+        for name, prob in probs.items():
+            if len(prob) >= recent_size:
+                recent_prob = prob[-recent_size:]
+                acc = float(np.mean((recent_prob > 0.5) == (y_recent == 1)))
+                scores[name] = acc
+
+        if not scores:
+            return {name: 1.0 / len(self.models) for name in self.models}
+
+        total = sum(scores.values())
+        weights = {name: s / total for name, s in scores.items()}
+
+        min_w = 0.1 / len(weights)
+        for name in weights:
+            weights[name] = max(weights[name], min_w)
+
+        total = sum(weights.values())
+        weights = {name: w / total for name, w in weights.items()}
+        return weights
+
+    def predict_proba(self, X: pd.DataFrame) -> NDArray[np.floating]:
+        """Returns P(spread > 0) for each sample."""
+        X_scaled = self.scaler.transform(X)
+
+        probs: dict[str, NDArray[np.floating]] = {}
+        for name, model in self.models.items():
+            try:
+                if name in ("logistic",):
+                    probs[name] = model.predict_proba(X_scaled)[:, 1]
+                else:
+                    probs[name] = model.predict_proba(X)[:, 1]
+            except Exception as e:
+                logger.warning("predict_proba failed for %s: %s", name, e)
+
+        if not probs:
+            return np.full(len(X), 0.5)
+
+        weights = self.weights or {name: 1.0 / len(probs) for name in probs}
+
+        final_prob = np.zeros(len(X))
+        for name, prob in probs.items():
+            final_prob += weights.get(name, 0) * prob
+
+        return final_prob
 
 
 class MultiHorizonEnsemble:

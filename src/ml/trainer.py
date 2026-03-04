@@ -7,7 +7,7 @@ from numpy.typing import NDArray
 from omegaconf import DictConfig
 from sklearn.pipeline import Pipeline
 
-from src.ml.ensemble import EnsembleAnalyst, MultiHorizonEnsemble
+from src.ml.ensemble import EnsembleAnalyst, EnsembleClassifier, MultiHorizonEnsemble
 from src.ml.features import EnergyFeatureEngineer, TimeSeriesImputer
 from src.trading.metrics import asymmetric_trading_loss
 
@@ -21,6 +21,7 @@ class FoldTrainer:
         self.numeric_cols = numeric_cols
         self.preprocessor: Pipeline | None = None
         self.analyst: AnalystModel | None = None
+        self.classifier: EnsembleClassifier | None = None
 
     def create_preprocessor(self) -> Pipeline:
         peak_hours = tuple(self.config.get("features", {}).get("peak_hours", [6, 7, 8, 9, 16, 17, 18, 19, 20]))
@@ -108,6 +109,45 @@ class FoldTrainer:
             return self.analyst.get_individual_predictions(X)
         return {}
 
+    def train_classifier(
+        self,
+        X: pd.DataFrame,
+        y: pd.Series,
+        analyst_config: DictConfig | None = None,
+        *,
+        verbose: bool = True,
+    ) -> EnsembleClassifier:
+        """Train classification ensemble for directional prediction."""
+        cfg = analyst_config or self.config
+        self.classifier = EnsembleClassifier(cfg)
+        self.classifier.fit(X, y, verbose=verbose)
+        return self.classifier
+
+    def _two_stage_predict(
+        self, X: pd.DataFrame, timestamps: pd.DatetimeIndex | None = None
+    ) -> NDArray[np.floating]:
+        """Combine classifier direction/confidence with regressor magnitude.
+
+        synthetic_pred = (2*prob - 1) * |regression_pred|
+        - Sign from classifier
+        - Magnitude ∝ classifier_confidence × regression_magnitude
+        - Works naturally with existing conviction metrics
+        """
+        prob = self.classifier.predict_proba(X)
+        reg_pred = self.predict_analyst(X, timestamps)
+
+        confidence_signed = 2 * prob - 1  # [-1, 1]: sign=direction, |.|=confidence
+        synthetic = confidence_signed * np.abs(reg_pred)
+        return synthetic
+
+    def predict_final(
+        self, X: pd.DataFrame, timestamps: pd.DatetimeIndex | None = None
+    ) -> NDArray[np.floating]:
+        """Final predictions — two-stage if classifier is trained, else regression."""
+        if self.classifier is not None:
+            return self._two_stage_predict(X, timestamps)
+        return self.predict_analyst(X, timestamps)
+
     def run_fold(
         self,
         train_df: pd.DataFrame,
@@ -125,8 +165,17 @@ class FoldTrainer:
             analyst_config=analyst_config,
         )
 
+        # two-stage: train classifier on binary target for directional accuracy
+        two_stage = self.config.ensemble.get("two_stage", False)
+        if two_stage:
+            self.train_classifier(
+                data["X_train"],
+                data["y_train"],
+                analyst_config=analyst_config,
+            )
+
         # --- train-set metrics (for overfitting detection) ---
-        train_preds = self.predict_analyst(data["X_train"], train_df.index)
+        train_preds = self.predict_final(data["X_train"], train_df.index)
         y_train_np = np.array(data["y_train"])
         train_residuals = y_train_np - train_preds
         ss_res = np.sum(train_residuals**2)
@@ -134,7 +183,7 @@ class FoldTrainer:
         train_r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
         train_mse = float(np.mean(train_residuals**2))
 
-        test_preds = self.predict_analyst(data["X_test"], test_df.index)
+        test_preds = self.predict_final(data["X_test"], test_df.index)
 
         # --- test-set metrics ---
         y_test_np = np.array(data["y_test"])
