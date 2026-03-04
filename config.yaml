@@ -74,7 +74,7 @@ trading:
   position_size_mwh: 1
   max_position: 2.0
   cost_per_mwh: 0.5
-  min_prediction_threshold: 0.5
+  min_prediction_threshold: 1.5
   currency: "EUR"
 
 mlflow:
