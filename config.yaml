@@ -21,7 +21,7 @@ cv:
   train_days: 180
   test_days: 30
   purge_days: 7
-  embargo_days: 2 
+  embargo_days: 2
   n_splits: 4
 
 model:
