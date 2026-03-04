@@ -5,7 +5,7 @@ import numpy as np
 import optuna
 from omegaconf import OmegaConf
 
-from src.data.loader import get_purged_walk_forward_splits, prepare_dataset
+from src.data.loader import get_expanding_walk_forward_splits, prepare_dataset
 from src.ml.trainer import FoldTrainer
 from src.trading.metrics import calculate_conviction_metrics
 
@@ -16,9 +16,9 @@ warnings.filterwarnings("ignore")
 def _load_data():
     config = OmegaConf.load("config.yaml")
     df, bool_cols, numeric_cols = prepare_dataset(config)
-    splits = get_purged_walk_forward_splits(
+    splits = get_expanding_walk_forward_splits(
         df_length=len(df),
-        train_days=config.cv.train_days,
+        initial_train_days=config.cv.initial_train_days,
         test_days=config.cv.test_days,
         purge_days=config.cv.purge_days,
         n_splits=config.cv.n_splits,
@@ -120,15 +120,25 @@ def objective(trial, config, df, bool_cols, numeric_cols, splits):
     avg_hit_rate = np.mean(fold_hit_rates)
     avg_trades = np.mean(fold_trade_counts)
 
-    # --- composite objective: hit rate x PnL, penalize low trade volume ---
-    # gate: if fewer than 30 trades/fold on average, heavy penalty
+    # --- constrained objective: max PnL subject to hit_rate >= 70% ---
+    # gate: too few trades → unreliable metrics
     if avg_trades < 30:
         return 0.0
 
-    # normalize: hit_rate is 0-100, pnl can be anything
-    # score = hit_rate * log(1 + max(pnl, 0)) — rewards both, multiplicative
+    # hit rate is 0-100 scale from metrics; normalize to 0-1
+    hr = avg_hit_rate / 100.0 if avg_hit_rate > 1 else avg_hit_rate
+
+    # hard penalty below 70%: linear ramp from 0 at 50% to 1 at 70%
+    # above 70%: mild bonus (don't over-optimize hit rate at cost of PnL)
+    if hr < 0.50:
+        hr_weight = 0.0
+    elif hr < 0.70:
+        hr_weight = (hr - 0.50) / 0.20  # linear 0→1 over [50%, 70%]
+    else:
+        hr_weight = 1.0 + 0.5 * (hr - 0.70)  # mild bonus above 70%
+
     pnl_component = np.log1p(max(avg_pnl, 0))
-    score = avg_hit_rate * pnl_component
+    score = hr_weight * pnl_component
 
     return score
 
@@ -147,10 +157,10 @@ if __name__ == "__main__":
 
     config, df, bool_cols, numeric_cols, splits = _load_data()
 
-    _heading("01", "OPTIMIZE", "optuna / hit rate x pnl composite")
+    _heading("01", "OPTIMIZE", "optuna / max PnL s.t. hit_rate >= 70%")
     status("ensemble: xgboost + random forest + extra trees + ridge")
     status("regularized ranges / no multi-horizon")
-    status("200 trials / purged walk-forward cv / min 30 trades gate")
+    status("200 trials / expanding walk-forward cv / min 30 trades gate")
     console.print()
 
     n_trials = 200
