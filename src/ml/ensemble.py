@@ -28,6 +28,7 @@ class EnsembleAnalyst:
     def _init_models(self) -> None:
         for model_name in self.config.ensemble.models:
             if model_name == "xgboost":
+                from src.trading.metrics import asymmetric_trading_loss
                 self.models["xgboost"] = xgb.XGBRegressor(
                     n_estimators=self.config.model_params.xgboost.n_estimators,
                     max_depth=self.config.model_params.xgboost.max_depth,
@@ -35,7 +36,7 @@ class EnsembleAnalyst:
                     subsample=self.config.model_params.xgboost.subsample,
                     colsample_bytree=self.config.model_params.xgboost.colsample_bytree,
                     random_state=42,
-                    objective="reg:squarederror",
+                    objective=asymmetric_trading_loss,
                 )
 
             elif model_name == "lightgbm":
