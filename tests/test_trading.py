@@ -58,13 +58,13 @@ class TestConvictionMetrics:
         metrics = calculate_conviction_metrics(y_true, huge_preds, max_position=1.5)
         assert metrics["avg_position_size"] <= 1.5 + 1e-6
 
-    def test_threshold_filters_small_predictions(self):
+    def test_conviction_filter_skips_low_signal(self):
         y_true = pd.Series([1.0, -1.0, 5.0, -5.0] * 50)
         # mix of small and large predictions
         preds = np.array([0.1, -0.1, 3.0, -3.0] * 50)
-        m_no_thresh = calculate_conviction_metrics(y_true, preds, min_prediction_threshold=0.0)
-        m_thresh = calculate_conviction_metrics(y_true, preds, min_prediction_threshold=0.5)
-        # threshold should filter some trades
-        assert m_thresh["total_trades"] < m_no_thresh["total_trades"]
-        # hit rate should improve (small preds are noisy, large preds are directional)
-        assert m_thresh["hit_rate"] >= m_no_thresh["hit_rate"]
+        m_no_filter = calculate_conviction_metrics(y_true, preds, min_conviction=0.0)
+        m_filtered = calculate_conviction_metrics(y_true, preds, min_conviction=0.5)
+        # conviction filter should skip some trades
+        assert m_filtered["total_trades"] < m_no_filter["total_trades"]
+        # hit rate should improve (low-conviction trades are noisy)
+        assert m_filtered["hit_rate"] >= m_no_filter["hit_rate"]

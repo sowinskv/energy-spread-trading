@@ -11,12 +11,12 @@ def calculate_conviction_metrics(
     cost_per_mwh: float = 0.5,
     max_position: float = 2.0,
     vol_lookback: int = 168,
-    min_prediction_threshold: float = 0.0,
+    min_conviction: float = 0.0,
 ) -> dict[str, float | int | NDArray]:
     """Conviction-based trading metrics — no binary gate, continuous sizing.
 
     Position size = clip(|pred| / rolling_std(pred), 0, max_position).
-    Predictions with |pred| < min_prediction_threshold are skipped (size=0).
+    Predictions with conviction < min_conviction are skipped (size=0).
     PnL per hour = sign(pred) * size * actual_spread - cost * size.
     """
     y = np.asarray(y_true, dtype=float)
@@ -32,9 +32,9 @@ def calculate_conviction_metrics(
     conviction = np.abs(preds) / rolling_vol
     position_sizes = np.clip(conviction, 0, max_position)
 
-    # skip tiny predictions — they have ~50/50 direction accuracy and guaranteed cost drag
-    below_threshold = np.abs(preds) < min_prediction_threshold
-    position_sizes[below_threshold] = 0.0
+    # skip low-conviction predictions — adaptive to prediction volatility regime
+    low_conviction = conviction < min_conviction
+    position_sizes[low_conviction] = 0.0
 
     # direction from sign of prediction
     direction = np.sign(preds)

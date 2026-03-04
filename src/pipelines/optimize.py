@@ -100,7 +100,7 @@ def objective(trial, config, df, bool_cols, numeric_cols, splits):
                 data["y_test"], test_preds,
                 cost_per_mwh=config.trading.cost_per_mwh,
                 max_position=config.trading.get("max_position", 2.0),
-                min_prediction_threshold=config.trading.get("min_prediction_threshold", 0.0),
+                min_conviction=config.trading.get("min_conviction", 0.0),
             )
             pnl = metrics["total_pnl"] if not np.isnan(metrics["total_pnl"]) else 0
             hit_rate = metrics["hit_rate"] if not np.isnan(metrics["hit_rate"]) else 0
