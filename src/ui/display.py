@@ -48,10 +48,6 @@ def header(title: str, subtitle: str | None = None) -> None:
         console.print(Text(f"{INDENT}{subtitle}", style="dim"))
 
 
-def entry(term: str, definition: str) -> None:
-    _kv(term, definition)
-
-
 def fold_header(fold: int, train_size: int, test_size: int) -> None:
     _heading(
         f"{fold:02d}",

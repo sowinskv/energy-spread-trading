@@ -63,8 +63,6 @@ def objective(trial, config, df, bool_cols, numeric_cols, splits):
     ensemble_params = {
         "enable": True,
         "models": ["xgboost", "random_forest", "extra_trees", "ridge"],
-        "reweight_frequency": trial.suggest_categorical("reweight_frequency", [168, 336, 720]),
-        "performance_window": trial.suggest_categorical("performance_window", [24, 168, 336]),
         "multi_horizon": False,
     }
 

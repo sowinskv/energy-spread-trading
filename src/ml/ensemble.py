@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import logging
-import pickle
 
-import lightgbm as lgb
 import mlflow
 import numpy as np
 import pandas as pd
@@ -36,22 +34,6 @@ class EnsembleAnalyst:
                     colsample_bytree=self.config.model_params.xgboost.colsample_bytree,
                     random_state=42,
                     objective="reg:squarederror",
-                )
-
-            elif model_name == "lightgbm":
-                self.models["lightgbm"] = lgb.LGBMRegressor(
-                    n_estimators=self.config.model_params.lightgbm.n_estimators,
-                    max_depth=self.config.model_params.lightgbm.max_depth,
-                    learning_rate=self.config.model_params.lightgbm.learning_rate,
-                    num_leaves=self.config.model_params.lightgbm.num_leaves,
-                    subsample=self.config.model_params.lightgbm.subsample,
-                    colsample_bytree=self.config.model_params.lightgbm.colsample_bytree,
-                    min_child_samples=self.config.model_params.lightgbm.min_child_samples,
-                    min_split_gain=self.config.model_params.lightgbm.min_split_gain,
-                    random_state=43,
-                    objective="regression",
-                    boosting_type="gbdt",
-                    verbosity=-1,
                 )
 
             elif model_name == "random_forest":
@@ -216,24 +198,6 @@ class EnsembleAnalyst:
                 predictions[name] = np.zeros(len(X))
 
         return predictions
-
-    def save(self, filepath: str) -> None:
-        try:
-            with open(filepath, "wb") as f:
-                pickle.dump(self, f)
-        except OSError as e:
-            logger.error("failed to save ensemble to %s: %s", filepath, e)
-            raise
-
-    @classmethod
-    def load(cls, filepath: str) -> EnsembleAnalyst:
-        try:
-            with open(filepath, "rb") as f:
-                return pickle.load(f)
-        except FileNotFoundError:
-            raise FileNotFoundError(f"ensemble file not found: {filepath}") from None
-        except (pickle.UnpicklingError, EOFError) as e:
-            raise ValueError(f"corrupted ensemble file '{filepath}': {e}") from e
 
 
 class EnsembleClassifier:
