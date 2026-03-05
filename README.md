@@ -147,6 +147,6 @@ bound (17.05) is still excellent. all 4 folds are independently profitable.
 
 selectivity.
 conviction threshold of 1.2 means the model trades only 17.9% of hours.
-it stays out when uncertain — exactly what a real trader would do.
+it stays out when uncertain.
 
 ---
