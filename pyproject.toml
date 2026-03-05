@@ -2,6 +2,7 @@
 name = "energy-trading"
 version = "0.1.0"
 description = "Energy price spread forecasting and algorithmic trading pipeline"
+license = "LicenseRef-Proprietary"
 requires-python = ">=3.12"
 dependencies = [
     "pandas>=2.3",
