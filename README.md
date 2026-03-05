@@ -1,57 +1,112 @@
 # Energy
 
-A spread forecasting and trading pipeline for the Polish energy market.
+spread forecasting and trading system for the Polish day-ahead electricity market.
 
-Predicts the SDAC–IDA1 price spread using a two-stage ensemble approach: a regressor estimates spread magnitude while a classifier predicts direction. Trades are filtered through conviction-based sizing that only acts when confidence is high enough.
+predicts the SDAC–IDA1 price spread. trades only when conviction is high.
 
-## How it works
+---
 
-2 stages:
+## 00 — Contents
 
-"1"
-An ensemble of XGBoost, Random Forest, Extra Trees and Ridge regression models forecasts the spread magnitude. Their predictions are blended with adaptive, performance-based weights.
+```
+00    contents
+01    architecture
+02    structure
+03    features
+04    usage
+05    configuration
+```
 
-"2"
-A classification ensemble (XGBoost, Random Forest, Extra Trees, Logistic Regression) predicts the probability that the spread is positive. The final prediction combines both: 
+---
 
-`(2 × P(up) − 1) × |regression prediction|`.
+## 01 — Architecture
 
-Trades are sized by conviction — the ratio of prediction magnitude to recent prediction volatility. Low-conviction hours (0–5) are skipped entirely. Walk-forward cross-validation with purge gaps and embargo periods prevents lookahead bias. MLflow tracks every experiment.
+two stages.
 
-## Structure
+**01.1 — regression**
+ensemble of XGBoost, Random Forest, Extra Trees, and Ridge.
+estimates spread magnitude. models are weighted by recent performance.
+
+**01.2 — classification**
+ensemble of XGBoost, Random Forest, Extra Trees, and Logistic Regression.
+predicts probability that the spread is positive.
+
+**01.3 — synthesis**
+final prediction combines both stages:
+
+```
+prediction = (2 × P(up) − 1) × |regression estimate|
+```
+
+sign comes from the classifier. magnitude from the regressor.
+conviction determines position size. low-conviction hours are skipped.
+
+---
+
+## 02 — Structure
 
 ```
 src/
-├── data/          data loading, validation, CV splits
-├── ml/            ensemble models, feature engineering, fold trainer
-├── pipelines/     training and hyperparameter optimization entrypoints
-├── trading/       conviction-based metrics, position sizing
-└── ui/            terminal display formatting
+    data/           loading, validation, walk-forward CV splits
+    ml/             ensembles, feature engineering, fold trainer
+    pipelines/      training and optimization entrypoints
+    trading/        conviction metrics, position sizing
+    ui/             terminal display
+
+experiments/        ablation, diagnostics, frontiers
+tests/              unit and integration tests
+config.yaml         single source of truth
 ```
 
-## Usage
+---
 
-```bash
-make train          # run the training pipeline
-make optimize       # run optuna hyperparameter search
-make test           # run the test suite
-make lint           # lint with ruff
-make format         # auto-format with ruff
-make check          # lint + test
-make clean          # remove __pycache__ and .pytest_cache
+## 03 — Features
+
+all SDAC-derived features are shifted 24h.
+at decision time, current-day prices are unknown — we only see yesterday.
+
+**03.1 — market state** (lagged)
+cross-border flows, system imbalance, activation capacity,
+inter-market spreads (PL–DE, PL–SK), net position momentum.
+
+**03.2 — price dynamics** (lagged)
+SDAC lags (24h, 48h, 168h), rolling mean/std, EWMA, Bollinger width,
+24h return, spread momentum, mean-reversion z-score.
+
+**03.3 — fundamentals** (forward-looking, available pre-delivery)
+demand forecast, PV/wind generation forecasts, residual load,
+renewable share, gradients.
+
+**03.4 — calendar**
+hour, day-of-week, month (sin/cos encoded), weekend flag, peak hours.
+
+---
+
+## 04 — Usage
+
+```
+make train              run backtest
+make optimize           optuna hyperparameter search (continues existing study)
+make fresh-optimize     delete old study, start from scratch
+make test               run tests
+make check              lint + test
+make clean              remove caches
 ```
 
-Everything is configured through `config.yaml`. MLflow UI: `uv run mlflow ui`.
+MLflow UI:
 
-## Current performance
+```
+uv run mlflow ui
+```
 
-Backtest across 4 expanding walk-forward folds:
+---
 
-| Metric       | Value     |
-| ------------ | --------- |
-| PnL          | EUR 1,770 |
-| Sharpe       | 20.35     |
-| Sortino      | 28.58     |
-| Hit Rate     | 72.1%     |
-| Max Drawdown | EUR −164  |
-| Hours Traded | 27.8%     |
+## 05 — Configuration
+
+everything lives in `config.yaml`.
+
+model hyperparameters, ensemble composition, CV strategy,
+trading parameters (conviction threshold, position limits, skip hours),
+and leakage column exclusions.
+
+---

@@ -1,10 +1,13 @@
-.PHONY: train optimize test lint format check clean
+.PHONY: train optimize fresh-optimize test lint format check clean
 
 train:
 	uv run python -m src.pipelines.train
 
 optimize:
 	uv run python -m src.pipelines.optimize
+
+fresh-optimize:
+	rm -f optuna_study.db && uv run python -m src.pipelines.optimize
 
 test:
 	uv run pytest tests/ -v
