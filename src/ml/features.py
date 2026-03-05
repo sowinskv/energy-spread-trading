@@ -49,6 +49,14 @@ class EnergyFeatureEngineer(BaseEstimator, TransformerMixin):
     def transform(self, X: pd.DataFrame) -> pd.DataFrame:
         X = X.copy()
 
+        # --- production constraint: current-day SDAC prices are NOT known ---
+        # trading decisions (offers) are made before SDAC clears, so the most
+        # recent available SDAC data is from yesterday.  shift ALL SDAC-related
+        # columns by 24h up-front so every downstream feature is leak-free.
+        sdac_cols = [c for c in X.columns if "SDAC" in c]
+        for col in sdac_cols:
+            X[col] = X[col].shift(24)
+
         X["hour"] = X.index.hour
         X["hour_sin"] = np.sin(2 * np.pi * X["hour"] / 24)
         X["hour_cos"] = np.cos(2 * np.pi * X["hour"] / 24)
@@ -88,22 +96,23 @@ class EnergyFeatureEngineer(BaseEstimator, TransformerMixin):
             X["SDAC_PL"].shift(24).abs() + 1.0
         )
 
-        # volatility & regime filters (strictly shifted by 24h to prevent leakage!)
-        lags = [24, 48, 168]
-        for lag in lags:
-            X[f"sdac_pl_lag_{lag}h"] = X["SDAC_PL"].shift(lag)
+        # volatility & regime filters
+        # SDAC_PL is already shifted 24h (base shift above), so it represents
+        # the most recent known price.  lags are relative to that base.
+        X["sdac_pl_lag_24h"] = X["SDAC_PL"]                  # t-24 h (most recent available)
+        X["sdac_pl_lag_48h"] = X["SDAC_PL"].shift(24)         # t-48 h
+        X["sdac_pl_lag_168h"] = X["SDAC_PL"].shift(144)       # t-168 h
 
-        X["sdac_rolling_mean_24h"] = X["SDAC_PL"].shift(24).rolling(window=24).mean()
-        X["sdac_rolling_std_24h"] = X["SDAC_PL"].shift(24).rolling(window=24).std()
-        X["sdac_rolling_mean_168h"] = X["SDAC_PL"].shift(24).rolling(window=168).mean()
-
-        sdac_shifted = X["SDAC_PL"].shift(24)
+        # rolling stats — no extra shift needed, base is already t-24h
+        X["sdac_rolling_mean_24h"] = X["SDAC_PL"].rolling(window=24).mean()
+        X["sdac_rolling_std_24h"] = X["SDAC_PL"].rolling(window=24).std()
+        X["sdac_rolling_mean_168h"] = X["SDAC_PL"].rolling(window=168).mean()
 
         # bollinger band width proxy (volatility indicator)
         X["sdac_bb_width"] = (X["sdac_rolling_std_24h"] * 2) / (X["sdac_rolling_mean_24h"].abs() + 1e-5)
 
         # ewma (exponentially weighted moving average) for short-term trend
-        X["sdac_ewma_24h"] = sdac_shifted.ewm(span=24).mean()
+        X["sdac_ewma_24h"] = X["SDAC_PL"].ewm(span=24).mean()
 
         # renewable share of total generation (higher = more volatile prices)
         total_gen = X["fcst_pv_tot_gen"] + X["fcst_wi_tot_gen"]
