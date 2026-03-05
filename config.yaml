@@ -25,12 +25,12 @@ cv:
   n_splits: 4
 
 model:
-  n_estimators: 100
-  max_depth: 2
-  learning_rate: 0.0280
-  subsample: 0.6120
-  colsample_bytree: 0.8699
-  min_child_weight: 46
+  n_estimators: 140
+  max_depth: 3
+  learning_rate: 0.0106
+  subsample: 0.8711
+  colsample_bytree: 0.5141
+  min_child_weight: 40
   random_state: 42
 
 ensemble:
@@ -45,34 +45,34 @@ ensemble:
 
 model_params:
   xgboost:
-    n_estimators: 100
-    max_depth: 2
-    learning_rate: 0.0280
-    subsample: 0.6120
-    colsample_bytree: 0.8699
-    min_child_weight: 46
+    n_estimators: 140
+    max_depth: 3
+    learning_rate: 0.0106
+    subsample: 0.8711
+    colsample_bytree: 0.5141
+    min_child_weight: 40
 
   random_forest:
-    n_estimators: 300
-    max_depth: 7
-    min_samples_split: 29
-    min_samples_leaf: 8
+    n_estimators: 150
+    max_depth: 5
+    min_samples_split: 18
+    min_samples_leaf: 7
     max_features: 0.7
 
   extra_trees:
-    n_estimators: 150
-    max_depth: 4
-    min_samples_split: 19
-    min_samples_leaf: 15
-    max_features: "log2"
+    n_estimators: 100
+    max_depth: 8
+    min_samples_split: 29
+    min_samples_leaf: 18
+    max_features: 0.7
 
   ridge:
-    alpha: 0.1680
+    alpha: 33.7472
 
 trading:
   max_position: 2.0
   cost_per_mwh: 0.5
-  min_conviction: 0.6
+  min_conviction: 1.2
   skip_hours: [0, 1, 2, 3, 4, 5]
   currency: "EUR"
 
