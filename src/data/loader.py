@@ -105,7 +105,6 @@ def load_and_format_raw_data(filepath: str, *, winsor_pct: float = 0.01) -> pd.D
     df["target_rolling_mean_168h"] = df["spread_SDAC_IDA1_PL"].shift(24).rolling(window=168).mean()
     df["target_rolling_std_48h"] = df["spread_SDAC_IDA1_PL"].shift(24).rolling(window=48).std()
 
-    # winsorize target to reduce outlier influence
     spread = df["spread_SDAC_IDA1_PL"]
     q_lo, q_hi = spread.quantile(winsor_pct), spread.quantile(1 - winsor_pct)
     df["spread_SDAC_IDA1_PL"] = spread.clip(lower=q_lo, upper=q_hi)
@@ -171,7 +170,7 @@ def get_purged_walk_forward_splits(
     n_splits: int,
     embargo_days: int = 0,
 ) -> list[tuple[NDArray[np.intp], NDArray[np.intp]]]:
-    """Generate fixed-window purged walk-forward CV splits.
+    """generate fixed-window purged walk-forward CV splits.
 
     purge_days: gap BEFORE test (prevents train leaking into test)
     embargo_days: gap AFTER test (prevents next fold's train from

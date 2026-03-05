@@ -15,47 +15,35 @@ def calculate_conviction_metrics(
     timestamps: pd.DatetimeIndex | None = None,
     skip_hours: tuple[int, ...] = (),
 ) -> dict[str, float | int | NDArray]:
-    """Conviction-based trading metrics — no binary gate, continuous sizing.
-
-    Position size = clip(|pred| / rolling_std(pred), 0, max_position).
-    Predictions with conviction < min_conviction are skipped (size=0).
-    Hours in skip_hours are zeroed out (no trade).
-    PnL per hour = sign(pred) * size * actual_spread - cost * size.
+    """conviction-based trading metrics — no binary gate, continuous sizing.
     """
     y = np.asarray(y_true, dtype=float)
     preds = np.asarray(predictions, dtype=float)
     n = len(y)
 
-    # rolling prediction volatility for normalization
     pred_series = pd.Series(preds)
     rolling_vol = pred_series.rolling(vol_lookback, min_periods=24).std().bfill()
     rolling_vol = rolling_vol.clip(lower=1e-6).values
 
-    # conviction = |prediction| / recent prediction volatility
     conviction = np.abs(preds) / rolling_vol
     position_sizes = np.clip(conviction, 0, max_position)
 
-    # skip low-conviction predictions — adaptive to prediction volatility regime
     low_conviction = conviction < min_conviction
     position_sizes[low_conviction] = 0.0
 
-    # skip hours with poor directional accuracy (e.g. overnight)
     if timestamps is not None and skip_hours:
         hours = timestamps.hour if hasattr(timestamps, 'hour') else pd.DatetimeIndex(timestamps).hour
         skip_mask = np.isin(hours, skip_hours)
         position_sizes[skip_mask] = 0.0
 
-    # direction from sign of prediction
     direction = np.sign(preds)
 
-    # PnL calculation
     gross_pnl = direction * position_sizes * y
     costs = position_sizes * cost_per_mwh
     net_pnl = gross_pnl - costs
 
     equity = np.cumsum(net_pnl)
 
-    # metrics
     total_pnl = float(equity[-1]) if n > 0 else 0.0
 
     std = np.std(net_pnl)
@@ -90,7 +78,7 @@ def calculate_conviction_metrics(
 def asymmetric_trading_loss(
     y_true: NDArray[np.floating], y_pred: NDArray[np.floating]
 ) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
-    """Custom loss function for trading that penalizes false positives heavily"""
+    """custom loss function for trading that penalizes false positives heavily"""
     residual = y_pred - y_true
     grad = residual.copy()
     hess = np.ones_like(y_pred)
