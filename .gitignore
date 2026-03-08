@@ -1,8 +1,9 @@
 # data and models
-data/
+data/*
 !src/data/
 *.csv
 *.model
+!/data/energy_data.csv
 
 # plots and images
 plots/
