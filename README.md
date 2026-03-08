@@ -142,8 +142,8 @@ expanding walk-forward CV with a 7-day purge gap before each test fold
 and a 2-day embargo between folds. no information crosses the boundary.
 
 statistical significance.
-bootstrap Sharpe p-value = 0.000. the 95% confidence interval lower
-bound (17.05) is still excellent. all 4 folds are independently profitable.
+bootstrap Sharpe p-value = 0.000. the 95% confidence interval lower &
+bound (17.05). all 4 folds are independently profitable.
 
 selectivity.
 conviction threshold of 1.2 means the model trades only 17.9% of hours.
