@@ -47,7 +47,6 @@ def fold_data():
 
 # ── config helpers ────────────────────────────────────────────────────────────
 def _make_config(*, two_stage: bool = False, conformal: bool = False) -> OmegaConf:
-    """Minimal config for smoke tests — fast model, no ensemble overhead."""
     return OmegaConf.create({
         "data": {
             "target_col": "spread_SDAC_IDA1_PL",
@@ -123,7 +122,7 @@ class TestRunFoldSmoke:
         assert set(result["fit_metrics"].keys()) == EXPECTED_FIT_METRIC_KEYS
 
     def test_fit_metrics_are_finite(self, fold_data):
-        """All fit_metrics values must be finite (catches silent NaN/Inf)."""
+        """ALL fit_metrics values must be finite (catches silent NaN/Inf)."""
         trainer = _make_trainer(fold_data)
         result = trainer.run_fold(fold_data["train_df"], fold_data["test_df"])
         for key, val in result["fit_metrics"].items():
@@ -145,7 +144,7 @@ class TestRunFoldSmoke:
         assert len(mask) == TEST_ROWS
 
     def test_two_stage_prediction_shape(self, fold_data):
-        """Two-stage (classifier + regressor) predictions must match test set length."""
+        """2-stage (classifier + regressor) predictions must match test set length."""
         trainer = _make_trainer(fold_data, two_stage=True)
         result = trainer.run_fold(fold_data["train_df"], fold_data["test_df"])
         assert len(result["test_preds"]) == TEST_ROWS
