@@ -91,7 +91,7 @@ def objective(trial, config, df, bool_cols, numeric_cols, splits):
         )
 
         trainer = FoldTrainer(temp_config, bool_cols, numeric_cols)
-        result = trainer.run_fold(train_df, test_df, analyst_config=temp_config)
+        result = trainer.run_fold(train_df, test_df, analyst_config=temp_config, verbose=False)
 
         test_preds = result["test_preds"]
         conformal_mask = result.get("conformal_mask")

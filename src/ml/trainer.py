@@ -164,6 +164,8 @@ class FoldTrainer:
         analyst_config: DictConfig | None = None,
         drop_cols: list[str] | None = None,
         add_back_cols: list[str] | None = None,
+        *,
+        verbose: bool = True,
     ) -> dict[str, pd.Series | NDArray[np.floating] | pd.DatetimeIndex | dict]:
         data = self.prepare_fold_data(train_df, test_df, drop_cols=drop_cols, add_back_cols=add_back_cols)
 
@@ -172,6 +174,7 @@ class FoldTrainer:
             data["y_train"],
             primary_index=train_df.index,
             analyst_config=analyst_config,
+            verbose=verbose,
         )
 
         two_stage = self.config.ensemble.get("two_stage", False)
@@ -180,6 +183,7 @@ class FoldTrainer:
                 data["X_train"],
                 data["y_train"],
                 analyst_config=analyst_config,
+                verbose=verbose,
             )
 
         # --- train-set metrics (for overfitting detection) ---
