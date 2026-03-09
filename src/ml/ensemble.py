@@ -129,8 +129,8 @@ class EnsembleAnalyst:
         """
         tscv = TimeSeriesSplit(n_splits=3)
         X_np = X.values if isinstance(X, pd.DataFrame) else np.asarray(X)
-        # scaler is already fitted on full training X in fit() — reuse it
-        X_scaled = self.scaler.transform(X_np)
+        X_df = X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
+        X_scaled = self.scaler.transform(X_df)
         y_np = np.asarray(y)
 
         oof_mse: dict[str, list[float]] = {name: [] for name in self.models}
