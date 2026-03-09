@@ -20,8 +20,19 @@ REQUIRED_COLUMNS = [
 MAX_NAN_RATIO = 0.3
 
 
-def validate_dataframe(df: pd.DataFrame, stage: str = "raw") -> None:
-    """Validate DataFrame quality. Raises ValueError on critical issues."""
+def validate_dataframe(
+    df: pd.DataFrame,
+    stage: str = "raw",
+    *,
+    raise_on_high_nan: bool = False,
+) -> None:
+    """Validate DataFrame quality.
+
+    Raises ValueError if the frame is empty, or (when raise_on_high_nan=True)
+    if any column exceeds MAX_NAN_RATIO.  Use raise_on_high_nan=True for
+    training slices where high NaN indicates a data problem; leave it False
+    for test slices where rolling-window edge NaN is expected.
+    """
     from src.ui.display import warning as ui_warning
 
     if df.empty:
@@ -30,10 +41,13 @@ def validate_dataframe(df: pd.DataFrame, stage: str = "raw") -> None:
     nan_ratio = df.isna().mean()
     bad_cols = nan_ratio[nan_ratio > MAX_NAN_RATIO]
     if not bad_cols.empty:
-        ui_warning(
+        msg = (
             f"high NaN ratio (>{MAX_NAN_RATIO * 100:.0f}%) in {len(bad_cols)} columns: "
             f"{', '.join(bad_cols.index[:5].tolist())}"
         )
+        if raise_on_high_nan:
+            raise ValueError(f"[{stage}] {msg}")
+        ui_warning(msg)
 
     if isinstance(df.index, pd.DatetimeIndex) and df.index.duplicated().any():
         n_dups = df.index.duplicated().sum()

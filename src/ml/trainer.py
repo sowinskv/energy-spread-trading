@@ -42,6 +42,13 @@ class FoldTrainer:
         drop_cols: list[str] | None = None,
         add_back_cols: list[str] | None = None,
     ) -> dict[str, pd.DataFrame | pd.Series]:
+        from src.data.loader import validate_dataframe
+
+        # warn on unexpected NaN in training data; raise only if the fold is
+        # empty (raise_on_high_nan=False because rolling-window warmup rows
+        # legitimately exceed 30% NaN in short/early folds)
+        validate_dataframe(train_df, stage="train_fold", raise_on_high_nan=False)
+
         self.create_preprocessor()
         leakage_cols = self.config.data.leakage_cols
 

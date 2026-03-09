@@ -23,7 +23,7 @@ class TimeSeriesImputer(BaseEstimator, TransformerMixin):
         for col in self.bool_cols:
             X[col] = X[col].map({"TRUE": 1, "FALSE": 0, True: 1, False: 0}).fillna(0).astype(int)
 
-        X[self.numeric_cols] = X[self.numeric_cols].interpolate(method="linear", limit=3, limit_direction="forward")
+        X[self.numeric_cols] = X[self.numeric_cols].interpolate(method="linear", limit=3)
 
         for col in self.numeric_cols:
             X[col] = X[col].fillna(X[col].shift(168))
@@ -127,6 +127,7 @@ class EnergyFeatureEngineer(BaseEstimator, TransformerMixin):
 
         X["spread_acceleration"] = X["spread_momentum_24h"].diff(24)
 
-        X = X.bfill().fillna(0)
+        X = X.bfill()
+        X = X.fillna(0)
 
         return X

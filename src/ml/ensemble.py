@@ -70,7 +70,7 @@ class EnsembleAnalyst:
         individual_predictions = {}
         model_performance = {}
 
-        for name, model in self.models.items():
+        for name, model in list(self.models.items()):
             try:
                 if name in ["ridge"]:
                     model.fit(X_scaled, y)
