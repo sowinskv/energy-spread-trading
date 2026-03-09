@@ -26,11 +26,14 @@ predicts the SDAC–IDA1 price spread. trades only when conviction is high.
 
 **01.1 — regression**
 ensemble of XGBoost, Random Forest, Extra Trees, and Ridge.
-estimates spread magnitude. models are weighted by recent performance.
+estimates spread magnitude. models are weighted by out-of-fold MSE
+(TimeSeriesSplit, 3 folds) — weights are based on held-out performance.
 
 **01.2 — classification**
 ensemble of XGBoost, Random Forest, Extra Trees, and Logistic Regression.
 predicts probability that the spread is positive.
+tree classifiers are wrapped in isotonic calibration so output probabilities
+are reliable conviction signals, not raw overconfident scores.
 
 **01.3 — synthesis**
 final prediction combines both stages:
@@ -49,7 +52,7 @@ conviction determines position size. low-conviction hours are skipped.
 ```
 src/
     data/           loading, validation, walk-forward CV splits
-    ml/             ensembles, feature engineering, fold trainer
+    ml/             ensembles, feature engineering, fold trainer, conformal intervals
     pipelines/      training and optimization entrypoints
     trading/        conviction metrics, position sizing
     ui/             terminal display
@@ -108,7 +111,7 @@ everything lives in `config.yaml`.
 
 model hyperparameters, ensemble composition, CV strategy,
 trading parameters (conviction threshold, position limits, skip hours),
-and leakage column exclusions.
+leakage column exclusions, and conformal interval settings.
 
 ---
 
@@ -117,15 +120,19 @@ and leakage column exclusions.
 backtest across 4 expanding walk-forward folds. no lookahead, no overfitting.
 
 ```
-pnl                   EUR    1,673
-hit rate                      72.4%
-sharpe                        18.98
-sortino                       29.35
-max drawdown          EUR      −96
-hours traded                  17.9%
-sharpe 95% ci         [ 17.05, 21.00 ]
-sharpe p-value                0.000
+pnl                   EUR      795
+hit rate                       65.6%
+sharpe                         11.43
+sortino                        17.29
+max drawdown          EUR     −379
+hours traded                   19.9%
+sharpe 95% ci         [  7.11, 13.31]
+sharpe p-value                 0.000
 ```
+
+note: numbers reflect the corrected pipeline (per-fold winsorization, OOF ensemble
+weights, calibrated classifiers). pending reoptimization — hyperparameters were
+tuned against the previous leaky pipeline and have not been re-searched yet.
 
 **06.1 — why this is credible**
 
@@ -134,7 +141,7 @@ every SDAC column is shifted 24h. the model only sees yesterday's
 cleared prices and today's published forecasts.
 
 no overfitting.
-train R² is 0.07–0.09, test R² is ~0. the model doesn't memorize —
+train R² is 0.05–0.07, test R² is ~0. the model doesn't memorize —
 it barely fits the training set. the edge is directional, not magnitude.
 
 temporal isolation.
@@ -142,11 +149,11 @@ expanding walk-forward CV with a 7-day purge gap before each test fold
 and a 2-day embargo between folds. no information crosses the boundary.
 
 statistical significance.
-bootstrap Sharpe p-value = 0.000. the 95% confidence interval lower &
-bound (17.05). all 4 folds are independently profitable.
+bootstrap Sharpe p-value = 0.000. the 95% confidence interval lower
+bound (7.11) is well above zero. all 4 folds are independently profitable.
 
 selectivity.
-conviction threshold of 1.2 means the model trades only 17.9% of hours.
+conviction threshold of 1.2 means the model trades only 19.9% of hours.
 it stays out when uncertain.
 
 ---
