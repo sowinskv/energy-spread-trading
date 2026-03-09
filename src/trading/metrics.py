@@ -14,8 +14,11 @@ def calculate_conviction_metrics(
     min_conviction: float = 0.0,
     timestamps: pd.DatetimeIndex | None = None,
     skip_hours: tuple[int, ...] = (),
+    conformal_mask: NDArray[np.bool_] | None = None,
 ) -> dict[str, float | int | NDArray]:
     """conviction-based trading metrics — no binary gate, continuous sizing.
+
+    conformal_mask: boolean array (True = interval straddles zero = skip trade).
     """
     y = np.asarray(y_true, dtype=float)
     preds = np.asarray(predictions, dtype=float)
@@ -35,6 +38,9 @@ def calculate_conviction_metrics(
         hours = timestamps.hour if hasattr(timestamps, 'hour') else pd.DatetimeIndex(timestamps).hour
         skip_mask = np.isin(hours, skip_hours)
         position_sizes[skip_mask] = 0.0
+
+    if conformal_mask is not None and len(conformal_mask) == len(position_sizes):
+        position_sizes[conformal_mask] = 0.0
 
     direction = np.sign(preds)
 

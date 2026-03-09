@@ -75,12 +75,11 @@ def objective(trial, config, df, bool_cols, numeric_cols, splits):
         train_df = df.iloc[train_idx]
         test_df = df.iloc[test_idx]
 
-        trainer = FoldTrainer(config, bool_cols, numeric_cols)
-        data = trainer.prepare_fold_data(train_df, test_df)
-
         temp_config = OmegaConf.create(
             {
-                "ensemble": ensemble_params,
+                "data": OmegaConf.to_container(config.data),
+                "conformal": OmegaConf.to_container(config.get("conformal", {"enable": False})),
+                "ensemble": {**ensemble_params, "two_stage": config.ensemble.get("two_stage", False)},
                 "model": xgb_params,
                 "model_params": {
                     "xgboost": xgb_params,
@@ -90,27 +89,22 @@ def objective(trial, config, df, bool_cols, numeric_cols, splits):
                 },
             }
         )
-        trainer.train_analyst(
-            data["X_train"], data["y_train"], train_df.index, analyst_config=temp_config, verbose=False
-        )
 
-        # two-stage: train classifier for directional accuracy
-        two_stage = config.ensemble.get("two_stage", False)
-        if two_stage:
-            trainer.train_classifier(
-                data["X_train"], data["y_train"], analyst_config=temp_config, verbose=False
-            )
+        trainer = FoldTrainer(temp_config, bool_cols, numeric_cols)
+        result = trainer.run_fold(train_df, test_df, analyst_config=temp_config)
 
-        test_preds = trainer.predict_final(data["X_test"], test_df.index)
+        test_preds = result["test_preds"]
+        conformal_mask = result.get("conformal_mask")
 
         try:
             metrics = calculate_conviction_metrics(
-                data["y_test"], test_preds,
+                result["y_test"], test_preds,
                 cost_per_mwh=config.trading.cost_per_mwh,
                 max_position=config.trading.get("max_position", 2.0),
                 min_conviction=min_conviction,
                 timestamps=test_df.index,
                 skip_hours=tuple(config.trading.get("skip_hours", [])),
+                conformal_mask=conformal_mask,
             )
             pnl = metrics["total_pnl"] if not np.isnan(metrics["total_pnl"]) else 0
             hit_rate = metrics["hit_rate"] if not np.isnan(metrics["hit_rate"]) else 0

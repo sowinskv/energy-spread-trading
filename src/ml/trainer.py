@@ -7,6 +7,7 @@ from numpy.typing import NDArray
 from omegaconf import DictConfig
 from sklearn.pipeline import Pipeline
 
+from src.ml.conformal import ConformalRegressor
 from src.ml.ensemble import EnsembleAnalyst, EnsembleClassifier, MultiHorizonEnsemble
 from src.ml.features import EnergyFeatureEngineer, TimeSeriesImputer
 from src.trading.metrics import asymmetric_trading_loss
@@ -22,6 +23,7 @@ class FoldTrainer:
         self.preprocessor: Pipeline | None = None
         self.analyst: AnalystModel | None = None
         self.classifier: EnsembleClassifier | None = None
+        self.conformal: ConformalRegressor | None = None
 
     def create_preprocessor(self) -> Pipeline:
         peak_hours = tuple(self.config.get("features", {}).get("peak_hours", [6, 7, 8, 9, 16, 17, 18, 19, 20]))
@@ -49,6 +51,14 @@ class FoldTrainer:
         X_test = self.preprocessor.transform(test_df.drop(columns=leakage_cols))
         y_test = test_df[self.config.data.target_col]
 
+        # per-fold winsorization: clip bounds computed on training set only,
+        # then applied to test — fixes future-distribution leakage from global clipping
+        winsor_pct = self.config.data.get("winsor_pct", 0.01)
+        q_lo = float(y_train.quantile(winsor_pct))
+        q_hi = float(y_train.quantile(1 - winsor_pct))
+        y_train = y_train.clip(lower=q_lo, upper=q_hi)
+        y_test = y_test.clip(lower=q_lo, upper=q_hi)
+
         # ablation: add back columns that were dropped (e.g. raw integers)
         if add_back_cols:
             for col in add_back_cols:
@@ -62,7 +72,6 @@ class FoldTrainer:
                     X_train[col] = X_train.index.dayofweek
                     X_test[col] = X_test.index.dayofweek
 
-        # ablation: drop specific feature columns
         if drop_cols:
             existing = [c for c in drop_cols if c in X_train.columns]
             X_train = X_train.drop(columns=existing)
@@ -165,7 +174,6 @@ class FoldTrainer:
             analyst_config=analyst_config,
         )
 
-        # two-stage: train classifier on binary target for directional accuracy
         two_stage = self.config.ensemble.get("two_stage", False)
         if two_stage:
             self.train_classifier(
@@ -185,7 +193,6 @@ class FoldTrainer:
 
         test_preds = self.predict_final(data["X_test"], test_df.index)
 
-        # --- test-set metrics ---
         y_test_np = np.array(data["y_test"])
         test_residuals = y_test_np - test_preds
         ss_res_t = np.sum(test_residuals**2)
@@ -193,10 +200,27 @@ class FoldTrainer:
         test_r2 = 1 - (ss_res_t / ss_tot_t) if ss_tot_t > 0 else 0.0
         test_mse = float(np.mean(test_residuals**2))
 
+        self.conformal = None
+        if self.config.get("conformal", {}).get("enable", False):
+            alpha = self.config.conformal.get("alpha", 0.10)
+            cal_days = self.config.conformal.get("cal_days", 21)
+            cal_steps = cal_days * 24
+            if len(data["X_train"]) > cal_steps + 100:
+                X_cal = data["X_train"].iloc[-cal_steps:]
+                y_cal_np = np.asarray(data["y_train"].iloc[-cal_steps:])
+                cal_preds = self.predict_final(X_cal, X_cal.index)
+                residuals = np.abs(y_cal_np - cal_preds)
+                self.conformal = ConformalRegressor(alpha=alpha).calibrate(residuals)
+
+        conformal_mask = None
+        if self.conformal is not None and self.conformal.is_calibrated:
+            conformal_mask = self.conformal.uncertain_mask(test_preds)
+
         return {
             "y_test": data["y_test"],
             "test_preds": test_preds,
             "test_timestamps": test_df.index,
+            "conformal_mask": conformal_mask,
             "fit_metrics": {
                 "train_r2": train_r2,
                 "train_mse": train_mse,

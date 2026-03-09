@@ -8,8 +8,11 @@ import pandas as pd
 import xgboost as xgb
 from numpy.typing import NDArray
 from omegaconf import DictConfig
+from sklearn.base import clone
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.ensemble import ExtraTreesClassifier, ExtraTreesRegressor, RandomForestClassifier, RandomForestRegressor
 from sklearn.linear_model import LogisticRegression, Ridge
+from sklearn.model_selection import TimeSeriesSplit
 from sklearn.preprocessing import StandardScaler
 
 logger = logging.getLogger(__name__)
@@ -88,7 +91,7 @@ class EnsembleAnalyst:
                 del self.models[name]
 
         if individual_predictions:
-            self.weights = self._calculate_performance_weights(X, y, individual_predictions)
+            self.weights = self._calculate_oof_weights(X, y)
 
         if verbose:
             from src.ui.display import model_table
@@ -118,39 +121,47 @@ class EnsembleAnalyst:
 
         return self
 
-    def _calculate_performance_weights(
-        self, X: pd.DataFrame, y: pd.Series, predictions: dict[str, NDArray[np.floating]]
-    ) -> dict[str, float]:
-        if len(predictions) < 2:
-            return {name: 1.0 for name in self.models}
+    def _calculate_oof_weights(self, X: pd.DataFrame, y: pd.Series) -> dict[str, float]:
+        """Weight ensemble members by out-of-fold MSE (TimeSeriesSplit, 3 folds).
 
-        recent_size = max(100, int(len(y) * 0.3))
-        y_recent = y.iloc[-recent_size:]
+        Avoids rewarding memorization: weights are based on held-out performance,
+        not training-set error.
+        """
+        tscv = TimeSeriesSplit(n_splits=3)
+        X_np = X.values if isinstance(X, pd.DataFrame) else np.asarray(X)
+        # scaler is already fitted on full training X in fit() — reuse it
+        X_scaled = self.scaler.transform(X_np)
+        y_np = np.asarray(y)
 
-        errors = {}
-        performance_scores = {}
+        oof_mse: dict[str, list[float]] = {name: [] for name in self.models}
 
-        for name, pred in predictions.items():
-            if len(pred) >= recent_size:
-                recent_pred = pred[-recent_size:]
-                mse = np.mean((y_recent - recent_pred) ** 2)
-                mae = np.mean(np.abs(y_recent - recent_pred))
-                score = 1.0 / (1.0 + mse)
+        for tr_idx, val_idx in tscv.split(X_np):
+            X_tr, X_val = X_np[tr_idx], X_np[val_idx]
+            X_tr_sc, X_val_sc = X_scaled[tr_idx], X_scaled[val_idx]
+            y_tr, y_val = y_np[tr_idx], y_np[val_idx]
 
-                errors[name] = score
-                performance_scores[name] = {"mse": mse, "mae": mae, "score": score}
+            for name, model in self.models.items():
+                try:
+                    m = clone(model)
+                    if name == "ridge":
+                        m.fit(X_tr_sc, y_tr)
+                        pred = m.predict(X_val_sc)
+                    else:
+                        m.fit(X_tr, y_tr)
+                        pred = m.predict(X_val)
+                    oof_mse[name].append(float(np.mean((y_val - pred) ** 2)))
+                except Exception as e:
+                    logger.warning("OOF fold failed for %s: %s", name, e)
+                    oof_mse[name].append(float("inf"))
 
-        total_weight = sum(errors.values())
-        weights = {name: weight / total_weight for name, weight in errors.items()}
-
-        min_weight = 0.1 / len(weights)
-        for name in weights:
-            weights[name] = max(weights[name], min_weight)
-
-        total_weight = sum(weights.values())
-        weights = {name: weight / total_weight for name, weight in weights.items()}
-
-        return weights
+        avg_mse = {name: np.mean(errs) for name, errs in oof_mse.items() if errs}
+        scores = {name: 1.0 / (1.0 + mse) for name, mse in avg_mse.items()}
+        total = sum(scores.values())
+        weights = {name: s / total for name, s in scores.items()}
+        min_w = 0.1 / len(weights)
+        weights = {name: max(w, min_w) for name, w in weights.items()}
+        total = sum(weights.values())
+        return {name: w / total for name, w in weights.items()}
 
     def predict(self, X: pd.DataFrame) -> NDArray[np.floating]:
         if not self.models:
@@ -204,12 +215,14 @@ class EnsembleClassifier:
     """Classification ensemble for directional prediction (P(spread > 0)).
 
     Mirrors EnsembleAnalyst structure but uses classifiers.
-    Output is calibrated probability, used as conviction signal.
+    Tree models are wrapped in CalibratedClassifierCV(cv=3, method='isotonic')
+    so that output probabilities are reliable conviction signals.
     """
 
     def __init__(self, config: DictConfig) -> None:
         self.config = config
         self.models: dict = {}
+        self._raw_models: dict = {}
         self.weights: dict[str, float] | None = None
         self.scaler = StandardScaler()
         self._init_models()
@@ -217,7 +230,7 @@ class EnsembleClassifier:
     def _init_models(self) -> None:
         for model_name in self.config.ensemble.models:
             if model_name == "xgboost":
-                self.models["xgboost"] = xgb.XGBClassifier(
+                raw = xgb.XGBClassifier(
                     n_estimators=self.config.model_params.xgboost.n_estimators,
                     max_depth=self.config.model_params.xgboost.max_depth,
                     learning_rate=self.config.model_params.xgboost.learning_rate,
@@ -228,9 +241,11 @@ class EnsembleClassifier:
                     objective="binary:logistic",
                     eval_metric="logloss",
                 )
+                self._raw_models["xgboost"] = raw
+                self.models["xgboost"] = CalibratedClassifierCV(raw, cv=3, method="isotonic")
 
             elif model_name == "random_forest":
-                self.models["random_forest"] = RandomForestClassifier(
+                raw = RandomForestClassifier(
                     n_estimators=self.config.model_params.random_forest.n_estimators,
                     max_depth=self.config.model_params.random_forest.max_depth,
                     min_samples_split=self.config.model_params.random_forest.min_samples_split,
@@ -239,9 +254,11 @@ class EnsembleClassifier:
                     random_state=44,
                     n_jobs=-1,
                 )
+                self._raw_models["random_forest"] = raw
+                self.models["random_forest"] = CalibratedClassifierCV(raw, cv=3, method="isotonic")
 
             elif model_name == "extra_trees":
-                self.models["extra_trees"] = ExtraTreesClassifier(
+                raw = ExtraTreesClassifier(
                     n_estimators=self.config.model_params.extra_trees.n_estimators,
                     max_depth=self.config.model_params.extra_trees.max_depth,
                     min_samples_split=self.config.model_params.extra_trees.min_samples_split,
@@ -250,15 +267,19 @@ class EnsembleClassifier:
                     random_state=47,
                     n_jobs=-1,
                 )
+                self._raw_models["extra_trees"] = raw
+                self.models["extra_trees"] = CalibratedClassifierCV(raw, cv=3, method="isotonic")
 
             elif model_name == "ridge":
-                # logistic regression with C = 1/alpha (inverse regularization)
+                # logistic regression with C = 1/alpha — already well-calibrated, no wrapper needed
                 alpha = self.config.model_params.ridge.alpha
-                self.models["logistic"] = LogisticRegression(
+                raw = LogisticRegression(
                     C=1.0 / max(alpha, 1e-6),
                     random_state=45,
                     max_iter=1000,
                 )
+                self._raw_models["logistic"] = raw
+                self.models["logistic"] = raw
 
     def fit(self, X: pd.DataFrame, y: pd.Series, *, verbose: bool = True) -> EnsembleClassifier:
         y_binary = (y > 0).astype(int)
@@ -288,7 +309,7 @@ class EnsembleClassifier:
                 del self.models[name]
 
         if individual_probs:
-            self.weights = self._calculate_weights(y_binary, individual_probs)
+            self.weights = self._calculate_oof_weights(X, y_binary)
 
         if verbose:
             from src.ui.display import model_table
@@ -302,37 +323,55 @@ class EnsembleClassifier:
                 model_data.append({"name": name, "r2": perf["accuracy"], "mse": perf["log_loss"], "weight": weight})
                 ensemble_acc += weight * perf["accuracy"]
 
-            # display: "r²" column shows accuracy, "mse" column shows log_loss
             model_table(model_data, ensemble_acc, 0)
 
         return self
 
-    def _calculate_weights(
-        self, y_binary: NDArray, probs: dict[str, NDArray[np.floating]]
-    ) -> dict[str, float]:
-        recent_size = max(100, int(len(y_binary) * 0.3))
-        y_recent = y_binary[-recent_size:]
+    def _calculate_oof_weights(self, X: pd.DataFrame, y_binary: NDArray) -> dict[str, float]:
+        """Weight classifier members by out-of-fold accuracy (TimeSeriesSplit, 3 folds).
 
-        scores: dict[str, float] = {}
-        for name, prob in probs.items():
-            if len(prob) >= recent_size:
-                recent_prob = prob[-recent_size:]
-                acc = float(np.mean((recent_prob > 0.5) == (y_recent == 1)))
-                scores[name] = acc
+        Uses raw (uncalibrated) base estimators for speed — calibration is only
+        applied to the final fitted models, not during weight search.
+        """
+        tscv = TimeSeriesSplit(n_splits=3)
+        X_np = X.values if isinstance(X, pd.DataFrame) else np.asarray(X)
+        # fit a fresh scaler on this X for OOF (the main scaler is fit in fit())
+        X_scaled = StandardScaler().fit_transform(X_np)
+        y_np = np.asarray(y_binary)
 
-        if not scores:
-            return {name: 1.0 / len(self.models) for name in self.models}
+        oof_accs: dict[str, list[float]] = {name: [] for name in self._raw_models}
 
+        for tr_idx, val_idx in tscv.split(X_np):
+            X_tr, X_val = X_np[tr_idx], X_np[val_idx]
+            X_tr_sc, X_val_sc = X_scaled[tr_idx], X_scaled[val_idx]
+            y_tr, y_val = y_np[tr_idx], y_np[val_idx]
+
+            for name, base_model in self._raw_models.items():
+                try:
+                    m = clone(base_model)
+                    if name == "logistic":
+                        m.fit(X_tr_sc, y_tr)
+                        prob = m.predict_proba(X_val_sc)[:, 1]
+                    else:
+                        m.fit(X_tr, y_tr)
+                        prob = m.predict_proba(X_val)[:, 1]
+                    acc = float(np.mean((prob > 0.5) == (y_val == 1)))
+                    oof_accs[name].append(acc)
+                except Exception as e:
+                    logger.warning("OOF classifier fold failed for %s: %s", name, e)
+                    oof_accs[name].append(0.5)
+
+        avg_acc = {name: np.mean(accs) for name, accs in oof_accs.items() if accs}
+        # weight by improvement over random (0.5 baseline)
+        scores = {name: max(acc - 0.50, 1e-6) for name, acc in avg_acc.items()}
         total = sum(scores.values())
+        if total <= 0:
+            return {name: 1.0 / len(self._raw_models) for name in self._raw_models}
         weights = {name: s / total for name, s in scores.items()}
-
         min_w = 0.1 / len(weights)
-        for name in weights:
-            weights[name] = max(weights[name], min_w)
-
+        weights = {name: max(w, min_w) for name, w in weights.items()}
         total = sum(weights.values())
-        weights = {name: w / total for name, w in weights.items()}
-        return weights
+        return {name: w / total for name, w in weights.items()}
 
     def predict_proba(self, X: pd.DataFrame) -> NDArray[np.floating]:
         """Returns P(spread > 0) for each sample."""

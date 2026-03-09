@@ -1,6 +1,7 @@
 data:
   file_path: "data/energy_data.csv"
   target_col: "spread_SDAC_IDA1_PL"
+  winsor_pct: 0.01
   bool_cols:
     - "IS_ACTIVE_DOWN_SDAC_PL"
     - "IS_ACTIVE_UP_SDAC_PL"
@@ -75,6 +76,11 @@ trading:
   min_conviction: 1.2
   skip_hours: [0, 1, 2, 3, 4, 5]
   currency: "EUR"
+
+conformal:
+  enable: false  # disabled until alpha is tuned against actual residual distribution
+  alpha: 0.10    # 90% coverage — too conservative given current prediction noise (~7-8 EUR/MWh)
+  cal_days: 21
 
 mlflow:
   experiment_name: "energy_price_prediction"

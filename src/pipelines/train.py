@@ -91,6 +91,7 @@ def main():
                 min_conviction=min_conv,
                 timestamps=test_df.index,
                 skip_hours=skip_hrs,
+                conformal_mask=result.get("conformal_mask"),
             )
 
             fold_pnls.append(metrics["total_pnl"])
