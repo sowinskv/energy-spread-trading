@@ -26,12 +26,12 @@ cv:
   n_splits: 4
 
 model:
-  n_estimators: 140
-  max_depth: 3
-  learning_rate: 0.0106
-  subsample: 0.8711
-  colsample_bytree: 0.5141
-  min_child_weight: 40
+  n_estimators: 70
+  max_depth: 5
+  learning_rate: 0.0260
+  subsample: 0.6595
+  colsample_bytree: 0.8785
+  min_child_weight: 50
   random_state: 42
 
 ensemble:
@@ -46,29 +46,29 @@ ensemble:
 
 model_params:
   xgboost:
-    n_estimators: 140
-    max_depth: 3
-    learning_rate: 0.0106
-    subsample: 0.8711
-    colsample_bytree: 0.5141
-    min_child_weight: 40
+    n_estimators: 70
+    max_depth: 5
+    learning_rate: 0.0260
+    subsample: 0.6595
+    colsample_bytree: 0.8785
+    min_child_weight: 50
 
   random_forest:
-    n_estimators: 150
+    n_estimators: 100
     max_depth: 5
-    min_samples_split: 18
-    min_samples_leaf: 7
-    max_features: 0.7
+    min_samples_split: 32
+    min_samples_leaf: 13
+    max_features: log2
 
   extra_trees:
-    n_estimators: 100
+    n_estimators: 200
     max_depth: 8
-    min_samples_split: 29
-    min_samples_leaf: 18
+    min_samples_split: 34
+    min_samples_leaf: 20
     max_features: 0.7
 
   ridge:
-    alpha: 33.7472
+    alpha: 1.9473
 
 trading:
   max_position: 2.0
