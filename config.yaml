@@ -78,8 +78,8 @@ trading:
   currency: "EUR"
 
 conformal:
-  enable: false  # disabled until alpha is tuned against actual residual distribution
-  alpha: 0.10    # 90% coverage — too conservative given current prediction noise (~7-8 EUR/MWh)
+  enable: false # disabled until alpha is tuned against actual residual distribution
+  alpha: 0.10 # 90% coverage — too conservative given current prediction noise (~7-8 EUR/MWh)
   cal_days: 21
 
 mlflow:
